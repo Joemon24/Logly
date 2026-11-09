@@ -1,11 +1,9 @@
 from elasticsearch import Elasticsearch
 from datetime import datetime, timezone
 
-es = Elasticsearch(
-    "http://localhost:9200",
-    verify_certs=False,
-    request_timeout=30
-)
+from api.settings import elasticsearch_client
+
+es = elasticsearch_client()
 
 ALERT_INDEX = "ids-alerts"
 
@@ -49,6 +47,7 @@ def create_alert(event):
 
     es.index(
         index=ALERT_INDEX,
+        id=event["storage_id"],
         document=alert
     )
 

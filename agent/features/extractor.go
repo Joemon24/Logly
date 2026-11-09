@@ -32,10 +32,10 @@ func (e *Extractor) Update(ev types.NormalizedEvent) HostFeatures {
 
 	// Only auth category contributes in Phase-1
 	if ev.EventCategory == "auth" {
-		if ev.Action == "failed" {
+		if ev.Outcome == "failure" {
 			e.failedLogins = append(e.failedLogins, now)
 		}
-		if ev.Action == "allowed" {
+		if ev.Outcome == "success" {
 			e.successLogins = append(e.successLogins, now)
 		}
 		// track user (best-effort)

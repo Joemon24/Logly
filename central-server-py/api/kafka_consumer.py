@@ -13,6 +13,9 @@ from datetime import datetime, timedelta, timezone
 from collections import deque, defaultdict, Counter
 
 from kafka import KafkaConsumer
+from kafka.structs import TopicPartition, OffsetAndMetadata
+from api.settings import elasticsearch_client
+from api.soar.policy import alert_due
 from elasticsearch import Elasticsearch, helpers
 
 from sklearn.ensemble import IsolationForest
@@ -30,7 +33,6 @@ from api.soar.incident_manager import (
 
 from api.soar.response_engine import (
     block_ip,
-    is_blocked
 )
 
 from api.soar.notifier import (
@@ -46,33 +48,20 @@ from api.rule_engine import (
 
 def trigger_soar(event):
 
-    try:
-
-        create_alert(event)
-
-        create_incident(event)
-
-        block_ip(
-            event.get("src_ip")
-        )
-
-        send_notification(event)
-
-    except Exception as e:
-
-        print(
-            f"[SOAR ERROR] {e}"
-        )
+    create_alert(event)
+    create_incident(event)
+    block_ip(event.get("src_ip"))
+    send_notification(event)
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-KAFKA_BROKERS = ["localhost:19092"]
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:19092").split(",")
 
-TOPIC = "ids.events.v1"
+TOPIC = os.getenv("KAFKA_TOPIC", "ids.events.v1")
 
-GROUP_ID = "debug-v1"
+GROUP_ID = os.getenv("KAFKA_GROUP_ID", "ids-detector-v1")
 
 ES_HOST = "http://localhost:9200"
 
@@ -88,11 +77,7 @@ TRAINING_DATA_PATH = "models/training_data.pkl"
 # ELASTICSEARCH
 # =========================================================
 
-es = Elasticsearch(
-    ES_HOST,
-    verify_certs=False,
-    request_timeout=30
-)
+es = elasticsearch_client()
 
 bulk_buffer = []
 
@@ -113,6 +98,7 @@ model = IsolationForest(
 training_data = []
 
 model_trained = False
+print("ML status: rules-only unless validated model artifacts load successfully")
 
 TRAINING_LIMIT = 500
 
@@ -212,72 +198,7 @@ def safe_div(a, b):
 # PARSERS
 # =========================================================
 
-def extract_ip(event):
-
-    raw = event.get("raw", "")
-
-    if not raw:
-        raw = (
-            event.get("raw_event", {})
-            .get("data", "")
-        )
-
-    match = re.search(
-        r'ip=([\d\.]+)',
-        raw
-    )
-
-    if match:
-        return match.group(1)
-
-    return "0.0.0.0"
-
-
-def extract_user(event):
-
-    raw = event.get("raw", "")
-
-    if not raw:
-        raw = (
-            event.get("raw_event", {})
-            .get("data", "")
-        )
-
-    match = re.search(
-        r'user=([\w\-]+)',
-        raw
-    )
-
-    if match:
-        return match.group(1)
-
-    return "unknown"
-
-def extract_outcome(event):
-
-    raw = event.get("raw", "")
-
-    if not raw:
-        raw = (
-            event.get("raw_event", {})
-            .get("data", "")
-        )
-
-    raw = raw.lower()
-
-    if "failed" in raw:
-        return "failure"
-
-    if "failure" in raw:
-        return "failure"
-
-    if "success" in raw:
-        return "success"
-
-    if "accepted" in raw:
-        return "success"
-
-    return "unknown"
+from api.normalization import extract_ip, extract_user, extract_outcome
 
 # =========================================================
 # FEATURE ENGINE
@@ -533,7 +454,7 @@ consumer = KafkaConsumer(
     bootstrap_servers=KAFKA_BROKERS,
     group_id=GROUP_ID,
     auto_offset_reset="earliest",
-    enable_auto_commit=True,
+    enable_auto_commit=False,
     value_deserializer=lambda v: json.loads(
         v.decode("utf-8")
     ),
@@ -554,30 +475,19 @@ try:
         if not isinstance(payload, list):
             payload = [payload]
 
-        for event in payload:
+        for event_position, event in enumerate(payload):
 
             try:
 
-                if event is None:
-
-                    print("⚠️ Skipping null event")
-
+                if not isinstance(event, dict) or not event:
+                    bulk_buffer.append({
+                        "_index": "ids-rejected",
+                        "_id": f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}",
+                        "_source": {"reason": "Event must be a nonempty object", "payload": json.dumps(event)},
+                    })
                     continue
 
-                if not isinstance(event, dict):
-
-                    print(
-                f"⚠️ Invalid event type: {type(event)}"
-                )
-
-                    continue
-
-                if not event:
-
-                    print("⚠️ Empty event skipped")
-
-                    continue
-
+                event["storage_id"] = f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}"
                 now = datetime.now(timezone.utc)
 
 
@@ -586,6 +496,15 @@ try:
                     event["agent"] = {
                         "agent_id": "default"
                     }
+
+                metadata = event.get("event", {})
+                if isinstance(metadata, dict) and (
+                    metadata.get("type") == "heartbeat" or
+                    metadata.get("category") not in (None, "auth")
+                ):
+                    event["@timestamp"] = now.isoformat()
+                    bulk_buffer.append({"_index": ES_INDEX, "_id": event["storage_id"], "_source": event})
+                    continue
 
                 # =================================================
                 # CLEANUP
@@ -624,15 +543,6 @@ try:
                 # BLOCKED IP CHECK
                 # =================================================
 
-                if is_blocked(event["src_ip"]):
-
-                    print(
-                        f"[SOAR] Ignoring blocked IP "
-                        f"{event['src_ip']}"
-                    )
-
-                    continue
-
                 event["username"] = extract_user(event)
 
                 event["outcome"] = extract_outcome(event)
@@ -642,7 +552,10 @@ try:
 
                 # =================================================
 
-                event_type = "login_success"
+                event_type = "unknown"
+
+                if event["outcome"] == "success":
+                    event_type = "login_success"
 
                 if event["outcome"] == "failure":
 
@@ -906,9 +819,6 @@ try:
 
                             mitre_technique = "T1078"
 
-                            trigger_soar(event)
-
-                            event["soar_triggered"] = True
 
                             del correlation_state[
                                 correlation_key
@@ -918,39 +828,14 @@ try:
                 # SOAR EXECUTION
                 # =================================================
 
-                alert_key = (
-                    f"{event['alert_type']}:"
-                    f"{event['src_ip']}"
+                event["risk"].update(
+                    alert_type=event["alert_type"], severity=event["severity"],
+                    mitre_technique=event["mitre_technique"]
                 )
-
-                last_time = last_alert_time.get(
-                    alert_key
-                )
-
-                if last_time:
-
-                    delta = (
-                        now - last_time
-                    ).total_seconds()
-
-                    if delta < ALERT_COOLDOWN:
-
-                        print(
-                            f"[SUPPRESSED] "
-                            f"{alert_key}"
-                        )
-
-                        continue
-                if (
-                    event["severity"] == "critical"
-                    and not event["soar_triggered"]
-                    ):
-
+                alert_key, due = alert_due(event, now, last_alert_time, ALERT_COOLDOWN)
+                if due:
                     trigger_soar(event)
-                    last_alert_time[
-                        alert_key
-                    ] = now
-
+                    last_alert_time[alert_key] = now
                     event["soar_triggered"] = True
 
                 # =================================================
@@ -981,46 +866,27 @@ try:
                 bulk_buffer.append({
 
                     "_index": ES_INDEX,
+                    "_id": event["storage_id"],
 
                     "_source": event
                 })
 
-                if len(bulk_buffer) >= BULK_SIZE:
+            except Exception:
+                # Fail closed: do not acknowledge a record whose processing failed.
+                # Restart replays this record; deterministic IDs avoid duplicate documents.
+                raise
 
-                    helpers.bulk(
-                        es,
-                        bulk_buffer
-                    )
-
-                    print(
-                        f"📦 Bulk inserted "
-                        f"{len(bulk_buffer)}"
-                    )
-
-                    bulk_buffer.clear()
-
-            except Exception as e:
-
-                print("❌ Error:", e)
+        if bulk_buffer:
+            helpers.bulk(es, bulk_buffer)
+            bulk_buffer.clear()
+        consumer.commit({
+            TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "")
+        })
 
 except KeyboardInterrupt:
 
     print("\n🛑 Stopping consumer...")
 
 finally:
-
-    if bulk_buffer:
-
-        helpers.bulk(
-            es,
-            bulk_buffer
-        )
-
-        print(
-            f"📦 Final flush: "
-            f"{len(bulk_buffer)} events"
-        )
-
+    # Failed/partial records remain uncommitted and are replayed on restart.
     consumer.close()
-
-    print("✅ Consumer closed")

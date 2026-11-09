@@ -1,0 +1,28 @@
+name: IDS checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r central-server-py/requirements.txt
+      - run: PYTHONPATH=central-server-py python -m unittest discover -s central-server-py/tests -v
+      - run: docker compose config --quiet
+      - run: docker compose build detection-engine
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - run: go test -race ./...
+        working-directory: agent
+      - run: go vet ./...
+        working-directory: agent

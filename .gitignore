@@ -32,3 +32,4 @@ __pycache__/
 central-server-py/alerts.json
 central-server-py/incidents.json
 .DS_Store
+

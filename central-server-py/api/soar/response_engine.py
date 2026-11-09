@@ -1,43 +1,17 @@
-from elasticsearch import Elasticsearch
-from datetime import datetime, timezone
-
-blocked_ips = set()
-
-es = Elasticsearch(
-    "http://localhost:9200",
-    verify_certs=False,
-    request_timeout=30
-)
-
-BLOCK_INDEX = "ids-blocked"
+"""Detection-only response recommendations; no firewall enforcement is claimed."""
+import ipaddress
+import logging
 
 
 def block_ip(ip):
-
-    if not ip:
-        return
-
-    if ip not in blocked_ips:
-
-        blocked_ips.add(ip)
-
-        es.index(
-            index=BLOCK_INDEX,
-            document={
-
-                "src_ip": ip,
-
-                "blocked_at": datetime.now(
-                    timezone.utc
-                ).isoformat()
-            }
-        )
-
-        print(
-            f"[SOAR] BLOCKED IP: {ip}"
-        )
+    """Legacy entry point: recommend investigation, never suppress telemetry."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except (ValueError, TypeError):
+        return {"status": "invalid_address", "enforced": False}
+    logging.warning("Response recommended for %s; enforcement is disabled", address)
+    return {"status": "recommended", "enforced": False, "ip": str(address)}
 
 
 def is_blocked(ip):
-
-    return ip in blocked_ips
+    return False

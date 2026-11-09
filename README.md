@@ -1,3 +1,5 @@
+> **Release candidate:** See [readiness report](docs/READINESS.md) and [Linux deployment guide](docs/LINUX-DEPLOYMENT.md). This build uses real log inputs, defaults to detection-only recommendations, and does not implement firewall blocking. Historical feature claims below are not a production-readiness guarantee.
+
 # Distributed AI-Powered IDS + SOAR Platform
 
 A distributed Intrusion Detection and Response System built using:
@@ -200,5 +202,6 @@ Future Improvements
 Author
 
 Joemon Joy
+
 
 

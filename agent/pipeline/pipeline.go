@@ -31,13 +31,20 @@ type SendItem struct {
 
 /* ================= CONSTRUCTOR ================= */
 
+func logPath(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func New() *Pipeline {
 	return &Pipeline{
 		monitors: []*monitor.FileMonitor{
-			{Path: "/tmp/auth.log", Category: "auth"},
-			{Path: "/tmp/sys.log", Category: "system"},
-			{Path: "/tmp/kern.log", Category: "kernel"},
-			{Path: "/tmp/app.log", Category: "app"},
+			{Path: logPath("AUTH_LOG_PATH", "/var/log/auth.log"), Category: "auth"},
+			{Path: logPath("SYSTEM_LOG_PATH", "/var/log/syslog"), Category: "system"},
+			{Path: logPath("KERNEL_LOG_PATH", "/var/log/kern.log"), Category: "kernel"},
+			{Path: logPath("APP_LOG_PATH", "/var/log/ids-app.log"), Category: "app"},
 		},
 	}
 }
@@ -98,7 +105,7 @@ func (p *Pipeline) Start(ctx context.Context, agentInfo types.AgentInfo) {
 
 	var outSender sender.Sender
 
-	if os.Getenv("TRANSPORT") == "kafka" {
+	if os.Getenv("TRANSPORT") != "http" {
 		outSender = sender.NewKafkaSender()
 		log.Println("transport=kafka")
 	} else {

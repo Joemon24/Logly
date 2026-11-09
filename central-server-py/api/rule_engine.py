@@ -1,7 +1,7 @@
 import os
 import yaml
 
-RULES_DIR = "rules"
+RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 
 rules = []
 
@@ -12,7 +12,7 @@ def load_rules():
 
     rules.clear()
 
-    for file in os.listdir(RULES_DIR):
+    for file in sorted(os.listdir(RULES_DIR)):
 
         if not file.endswith(".yaml"):
             continue
@@ -125,4 +125,5 @@ def evaluate_rules(features):
                     rule["mitre"]["technique"]
             })
 
-    return matches
+    priority = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    return sorted(matches, key=lambda rule: (priority.get(rule["severity"], 4), rule["type"]))

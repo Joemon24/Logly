@@ -40,6 +40,10 @@ func (c *Client) SendBatch(events []EventEnvelope) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("ingest rejected batch: HTTP %d", resp.StatusCode)
+	}
+
 	return nil
 }
 

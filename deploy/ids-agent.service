@@ -1,0 +1,20 @@
+[Unit]
+Description=Distributed IDS log collection agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=ids
+Group=ids
+SupplementaryGroups=adm
+WorkingDirectory=/var/lib/ids-agent
+EnvironmentFile=/etc/ids/agent.env
+ExecStart=/opt/distributed-ids/bin/ids-agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ids-agent
+[Install]
+WantedBy=multi-user.target
