@@ -3,11 +3,9 @@ import uuid
 from elasticsearch import Elasticsearch
 from datetime import datetime, timezone
 
-es = Elasticsearch(
-    "http://localhost:9200",
-    verify_certs=False,
-    request_timeout=30
-)
+from api.settings import elasticsearch_client
+
+es = elasticsearch_client()
 
 INCIDENT_INDEX = "ids-incidents"
 
@@ -49,6 +47,7 @@ def create_incident(event):
 
     es.index(
         index=INCIDENT_INDEX,
+        id=event["storage_id"],
         document=incident
     )
 

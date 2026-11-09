@@ -9,3 +9,4 @@ type HostFeatures struct {
 	UniqueUsers5m   int
 	LastUpdated     time.Time
 }
+
