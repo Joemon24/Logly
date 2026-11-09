@@ -880,7 +880,7 @@ try:
             helpers.bulk(es, bulk_buffer)
             bulk_buffer.clear()
         consumer.commit({
-            TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "")
+            TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "", -1)
         })
 
 except KeyboardInterrupt:

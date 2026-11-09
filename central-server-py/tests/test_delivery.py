@@ -38,7 +38,10 @@ class DeliveryTests(unittest.TestCase):
         fake_kafka.KafkaConsumer = Consumer
         structs = types.ModuleType('kafka.structs')
         structs.TopicPartition = lambda topic, partition: (topic, partition)
-        structs.OffsetAndMetadata = lambda offset, metadata: (offset, metadata)
+        structs.OffsetAndMetadata = (
+            lambda offset, metadata, leader_epoch:
+            (offset, metadata, leader_epoch)
+        )   
         # Re-import connection-owning modules against this test's fake client.
         owned = ['api.settings', 'api.soar.alert_manager', 'api.soar.incident_manager']
         previous = {name: sys.modules.pop(name, None) for name in owned}
@@ -62,7 +65,10 @@ class DeliveryTests(unittest.TestCase):
         calls = self.run_consumer()
         self.assertEqual([c[0] for c in calls], ['bulk', 'commit', 'close'])
         self.assertEqual(calls[0][1][0]['_id'], 'ids.events.v1:0:7:0')
-        self.assertEqual(calls[1][1], {('ids.events.v1', 0): (8, '')})
+        self.assertEqual(
+            calls[1][1],
+            {('ids.events.v1', 0): (8, '', -1)}
+        )
 
     def test_failed_storage_never_commits(self):
         self.assertEqual([c[0] for c in self.run_consumer(fail=True)], ['bulk', 'close'])
