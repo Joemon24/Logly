@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "event_id": "evt2_64b37378df9ca4ac8c3b6d96d949266ff72950ca08c0c7a7a1d9dd32138e96c3",
+  "timestamp": "2026-11-09T10:15:35.123456789Z",
+  "ingest_timestamp": "2026-11-09T10:15:35.23456789Z",
+  "timestamp_source": "log",
+  "sequence": 5,
+  "agent": {
+    "agent_id": "linux-01",
+    "agent_type": "linux",
+    "agent_version": "2.0.0",
+    "generation": "agent-gen-7f3a9c2e"
+  },
+  "host": {
+    "hostname": "web-01",
+    "os": "ubuntu",
+    "os_version": "24.04",
+    "kernel": "6.8.0-45-generic"
+  },
+  "event": {
+    "category": "file_integrity",
+    "action": "file_modified",
+    "outcome": "modified"
+  },
+  "source": {
+    "entity_type": "process",
+    "name": "vim",
+    "pid": 7000
+  },
+  "target": {
+    "entity_type": "file",
+    "name": "authorized_keys",
+    "path": "/home/alice/.ssh/authorized_keys"
+  },
+  "raw_event": {
+    "format": "audit",
+    "data": "type=SYSCALL msg=audit(1762673755.123:43): arch=c000003e syscall=257 success=yes comm=\"vim\" key=\"logly-fim\"\n"
+  },
+  "collection": {
+    "source_id": "audit-log",
+    "source_type": "audit",
+    "path": "/var/log/audit/audit.log",
+    "generation": "source-gen-9a2c5f73",
+    "position": {
+      "byte_offset": 5120,
+      "record_number": 13
+    }
+  }
+}

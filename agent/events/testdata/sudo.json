@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "event_id": "evt2_31c06a03c81937415480226d0a3fa5bf2d4cd64e1bd05656050f40268b4fbbd0",
+  "timestamp": "2026-11-09T10:15:32.123456789Z",
+  "ingest_timestamp": "2026-11-09T10:15:32.23456789Z",
+  "timestamp_source": "log",
+  "sequence": 2,
+  "agent": {
+    "agent_id": "linux-01",
+    "agent_type": "linux",
+    "agent_version": "2.0.0",
+    "generation": "agent-gen-7f3a9c2e"
+  },
+  "host": {
+    "hostname": "web-01",
+    "os": "ubuntu",
+    "os_version": "24.04",
+    "kernel": "6.8.0-45-generic"
+  },
+  "event": {
+    "category": "sudo",
+    "action": "sudo_command",
+    "outcome": "success"
+  },
+  "source": {
+    "entity_type": "user",
+    "id": "1000",
+    "name": "alice"
+  },
+  "target": {
+    "entity_type": "process",
+    "name": "apt-get",
+    "path": "/usr/bin/apt-get",
+    "pid": 4412
+  },
+  "raw_event": {
+    "format": "text",
+    "data": "Nov  9 10:16:02 web-01 sudo: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt-get update\n"
+  },
+  "collection": {
+    "source_id": "auth-log",
+    "source_type": "file",
+    "path": "/var/log/auth.log",
+    "generation": "source-gen-4b8d1e6a",
+    "position": {
+      "byte_offset": 2048,
+      "record_number": 8
+    }
+  }
+}
