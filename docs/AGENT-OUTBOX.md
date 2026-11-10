@@ -1,8 +1,9 @@
 # Agent durable outbox (Phase 2)
 
-Status: **storage package and tests only.** Nothing in the v1 runtime pipeline
-uses this package yet. Kafka, Python, Docker, deployment files, and v1 code are
-unchanged.
+Status: **storage package and tests only.** The Phase 3 authentication-log
+collector (`agent/collector`, see `AGENT-AUTH-COLLECTOR.md`) consumes this
+package, but nothing in the v1 runtime pipeline uses it yet. Kafka dispatch,
+Python, Docker, deployment files, and v1 code are unchanged.
 
 Package: `agent/storage`
 Tests: `agent/storage/*_test.go`
@@ -111,6 +112,22 @@ One `BEGIN IMMEDIATE` transaction covers the entire batch:
 
 Any failure rolls the whole transaction back, including checkpoint changes and
 first-use generation bindings. There is no partial batch.
+
+### `AdvanceCheckpoint(ctx, sourceID, sourceType, generation, position)`
+
+Advances a source checkpoint without inserting an outbox row. It is for records
+the collector deliberately did not emit, such as unrelated authentication-log
+lines. One transaction:
+
+1. Require the generation to be the active one for the source, reusing the same
+   validation as `Append`.
+2. Apply the strict checkpoint ordering below.
+3. Update `source_checkpoints.updated_at` and commit.
+
+It does not touch the outbox or consume outbox capacity, so an ignored line can
+still be checkpointed while the outbox is full. It must never be used to step
+over a malformed, oversized, or otherwise rejected security record; the
+collector stops on those before calling it.
 
 ### `Ack(ctx, eventIDs)`
 
@@ -271,10 +288,11 @@ position would otherwise be valid.
 limit before validation and returns `ErrOversizedEvent`; the entire batch rolls
 back. The store does **not** have a rejection ledger or policy engine.
 
-The future collector must not silently advance the checkpoint past a rejected
-record. It must either stop and alert for operator action, or durably record a
-rejection decision (source ID, generation, position, reason) before advancing.
-Never hash, store, or send an oversized payload as a normal event.
+The collector must not silently advance the checkpoint past a rejected record.
+`agent/collector` stops with a typed rejection and leaves the checkpoint at the
+previous record. It advances only recognized irrelevant records (through
+`AdvanceCheckpoint`) or validated events (through `Append`). Never hash, store,
+or send an oversized payload as a normal event.
 
 ## Capacity and backpressure
 
@@ -361,17 +379,18 @@ Known limits:
   drains the outbox in repeated batches.
 - Busy timeouts can still surface `SQLITE_BUSY` under long contention.
 
-Phase 3, not started here, must:
+The authentication-log collector in `agent/collector` covers the collection,
+identity, checkpoint, rejection-policy, and bounded-read parts of Phase 3. The
+remaining integration work is:
 
-1. Make the collector use `Store.Identity()` and `NextHeartbeatSequence()`.
-2. Replace the item-at-a-time send path with: `Pending` → Kafka → `Ack` only
+1. Replace the item-at-a-time send path with: `Pending` → Kafka → `Ack` only
    after broker confirmation.
-3. Add retry/backoff for `ErrDiskFull`, `SQLITE_BUSY`, and capacity pressure.
-4. Add metrics for pending count, oldest pending age, ack failures, and
+2. Add dispatcher retry/backoff for `ErrDiskFull`, `SQLITE_BUSY`, and capacity
+   pressure.
+3. Add metrics for pending count, oldest pending age, ack failures, and
    checkpoint lag.
-5. Define and implement the oversized-record rejection policy.
-6. Add graceful shutdown that stops collection before closing the store.
-7. Add an integration test with the real Kafka client and the v2 event model.
+4. Add graceful shutdown that stops collection before closing the store.
+5. Add an integration test with the real Kafka client and the v2 event model.
 
 ## Test coverage
 

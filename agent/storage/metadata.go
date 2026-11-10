@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"agent/events"
@@ -58,6 +59,66 @@ func (s *Store) Checkpoint(ctx context.Context, sourceID, generation string) (Ch
 		checkpoint.ByteOffset = &value
 	}
 	return checkpoint, true, nil
+}
+
+// AdvanceCheckpoint durably advances a source checkpoint without storing an
+// event. It is for records the collector deliberately did not emit, such as
+// unrelated authentication-log lines.
+//
+// The operation is atomic, generation-aware, and monotonic: it requires the
+// generation to be active for the source and the position to be strictly after
+// the stored checkpoint, using the same ordering as Append. It does not touch
+// the outbox or consume outbox capacity. The caller must not use it to step
+// over a malformed or oversized security record.
+func (s *Store) AdvanceCheckpoint(
+	ctx context.Context,
+	sourceID string,
+	sourceType events.SourceType,
+	generation string,
+	position events.Position,
+) error {
+	if sourceID == "" || generation == "" || !sourceType.Valid() {
+		return fmt.Errorf(
+			"%w: checkpoint advance requires source_id, a valid source_type, and a generation",
+			ErrInvalidConfig)
+	}
+	if position.RecordNumber == 0 {
+		return fmt.Errorf("%w: checkpoint record_number must be 1 or greater", ErrInvalidConfig)
+	}
+	if position.RecordNumber > math.MaxInt64 {
+		return fmt.Errorf("%w: checkpoint record_number exceeds the SQLite INTEGER range",
+			ErrInvalidConfig)
+	}
+	if position.ByteOffset != nil && *position.ByteOffset < 0 {
+		return fmt.Errorf("%w: checkpoint byte_offset must not be negative", ErrInvalidConfig)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return mapError(err)
+	}
+	defer tx.Rollback()
+
+	activeGenerations := make(map[string]SourceGeneration)
+	if err := ensureActiveGeneration(ctx, tx, activeGenerations,
+		sourceID, sourceType, generation); err != nil {
+		return err
+	}
+	state, err := loadCheckpoint(ctx, tx, sourceID, generation)
+	if err != nil {
+		return err
+	}
+	if err := state.accept(sourceType, position, false); err != nil {
+		return err
+	}
+	if err := state.save(ctx, tx, sourceID, generation,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return mapError(err)
+	}
+	return nil
 }
 
 // NextHeartbeatSequence atomically increments and returns the persistent

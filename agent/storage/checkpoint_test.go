@@ -134,6 +134,108 @@ func TestCheckpointProgressionAuthoritativeOrdering(t *testing.T) {
 	}
 }
 
+func TestAdvanceCheckpointIsAtomicGenerationAwareAndMonotonic(t *testing.T) {
+	cfg := testConfig(t)
+	store := openTestStore(t, cfg)
+	ctx := context.Background()
+
+	generation, err := store.TransitionSourceGeneration(ctx,
+		"advance-source", events.SourceTypeFile, "", "gen-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation.Generation != "gen-1" {
+		t.Fatalf("generation = %+v", generation)
+	}
+
+	// A checkpoint can exist without an outbox event.
+	first := events.Position{ByteOffset: int64Ptr(0), RecordNumber: 1}
+	if err := store.AdvanceCheckpoint(ctx,
+		"advance-source", events.SourceTypeFile, "gen-1", first); err != nil {
+		t.Fatalf("first advance: %v", err)
+	}
+	entries, err := store.Pending(ctx, MaxPendingLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("checkpoint-only advance inserted %d events", len(entries))
+	}
+	checkpoint, found, err := store.Checkpoint(ctx, "advance-source", "gen-1")
+	if err != nil || !found {
+		t.Fatalf("checkpoint: found=%v err=%v", found, err)
+	}
+	if checkpoint.RecordNumber != 1 || checkpoint.ByteOffset == nil || *checkpoint.ByteOffset != 0 {
+		t.Fatalf("checkpoint = %+v", checkpoint)
+	}
+
+	// Ordering matches Append: both coordinates must move forward.
+	if err := store.AdvanceCheckpoint(ctx, "advance-source", events.SourceTypeFile, "gen-1",
+		events.Position{ByteOffset: int64Ptr(0), RecordNumber: 2}); !errors.Is(err, ErrCheckpointConflict) {
+		t.Fatalf("contradictory advance = %v, want ErrCheckpointConflict", err)
+	}
+	if err := store.AdvanceCheckpoint(ctx, "advance-source", events.SourceTypeFile, "gen-1",
+		events.Position{ByteOffset: int64Ptr(5), RecordNumber: 1}); !errors.Is(err, ErrCheckpointConflict) {
+		t.Fatalf("contradictory offset advance = %v, want ErrCheckpointConflict", err)
+	}
+	if err := store.AdvanceCheckpoint(ctx, "advance-source", events.SourceTypeFile, "gen-1",
+		events.Position{ByteOffset: int64Ptr(0), RecordNumber: 1}); !errors.Is(err, ErrStalePosition) {
+		t.Fatalf("stale advance = %v, want ErrStalePosition", err)
+	}
+
+	// The generation must be the active one.
+	if err := store.AdvanceCheckpoint(ctx, "advance-source", events.SourceTypeFile, "gen-2",
+		events.Position{ByteOffset: int64Ptr(10), RecordNumber: 2}); !errors.Is(err, ErrSourceGenerationMismatch) {
+		t.Fatalf("inactive generation advance = %v, want ErrSourceGenerationMismatch", err)
+	}
+	if err := store.AdvanceCheckpoint(ctx, "advance-source", events.SourceTypeAudit, "gen-1",
+		events.Position{ByteOffset: int64Ptr(10), RecordNumber: 2}); !errors.Is(err, ErrGenerationConflict) {
+		t.Fatalf("source type change = %v, want ErrGenerationConflict", err)
+	}
+
+	next := events.Position{ByteOffset: int64Ptr(10), RecordNumber: 2}
+	if err := store.AdvanceCheckpoint(ctx,
+		"advance-source", events.SourceTypeFile, "gen-1", next); err != nil {
+		t.Fatalf("second advance: %v", err)
+	}
+
+	store = reopen(t, store, cfg)
+	checkpoint, found, err = store.Checkpoint(ctx, "advance-source", "gen-1")
+	if err != nil || !found {
+		t.Fatalf("checkpoint after reopen: found=%v err=%v", found, err)
+	}
+	if checkpoint.RecordNumber != 2 || checkpoint.ByteOffset == nil || *checkpoint.ByteOffset != 10 {
+		t.Fatalf("checkpoint after reopen = %+v", checkpoint)
+	}
+}
+
+func TestAdvanceCheckpointDoesNotConsumeOutboxCapacity(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Capacity = 1
+	store := openTestStore(t, cfg)
+	ctx := context.Background()
+
+	event := testEvent(t, store, "capacity-source", events.SourceTypeFile, "gen-1", 1, int64Ptr(0))
+	if err := store.Append(ctx, []events.Event{event}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The outbox is full, but advancing past an ignored record must still work.
+	if err := store.AdvanceCheckpoint(ctx, "capacity-source", events.SourceTypeFile, "gen-1",
+		events.Position{ByteOffset: int64Ptr(10), RecordNumber: 2}); err != nil {
+		t.Fatalf("advance while full: %v", err)
+	}
+	checkpoint, found, err := store.Checkpoint(ctx, "capacity-source", "gen-1")
+	if err != nil || !found || checkpoint.RecordNumber != 2 {
+		t.Fatalf("checkpoint = %+v found=%v err=%v", checkpoint, found, err)
+	}
+
+	second := testEvent(t, store, "capacity-source", events.SourceTypeFile, "gen-1", 3, int64Ptr(20))
+	if err := store.Append(ctx, []events.Event{second}); !errors.Is(err, ErrCapacityReached) {
+		t.Fatalf("append after advance = %v, want ErrCapacityReached", err)
+	}
+}
+
 func TestDuplicateAfterAcknowledgementIsStale(t *testing.T) {
 	cfg := testConfig(t)
 	store := openTestStore(t, cfg)
