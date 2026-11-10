@@ -28,6 +28,15 @@ import (
 // DefaultCapacity is used when Config.Capacity is zero.
 const DefaultCapacity = 10_000
 
+// MaxPendingLimit is the largest batch Pending will return. Dispatchers must
+// pass a positive limit no larger than this value.
+const MaxPendingLimit = 1_000
+
+// storageSchemaVersion is the schema version recorded in PRAGMA user_version.
+// Version 1 was the original unversioned Phase 2 schema; version 2 adds durable
+// source-generation history.
+const storageSchemaVersion = 2
+
 const (
 	dbFileMode        = 0o600
 	dbDirMode         = 0o700
@@ -38,16 +47,23 @@ const (
 
 // Errors returned by this package. Use errors.Is to test them.
 var (
-	ErrDiskFull              = errors.New("storage: disk full")
-	ErrCorrupt               = errors.New("storage: database is corrupt")
-	ErrCorruptPayload        = errors.New("storage: stored event payload is corrupt")
-	ErrEventIDConflict       = errors.New("storage: event_id conflict")
-	ErrCheckpointConflict    = errors.New("storage: checkpoint conflict")
-	ErrCapacityReached       = errors.New("storage: outbox capacity reached")
-	ErrAgentIdentityMismatch = errors.New("storage: agent identity mismatch")
-	ErrOversizedEvent        = errors.New("storage: event exceeds the raw evidence size limit")
-	ErrInvalidEvent          = errors.New("storage: invalid event")
-	ErrInvalidConfig         = errors.New("storage: invalid config")
+	ErrDiskFull                 = errors.New("storage: disk full")
+	ErrCorrupt                  = errors.New("storage: database is corrupt")
+	ErrCorruptPayload           = errors.New("storage: stored event payload is corrupt")
+	ErrEventIDConflict          = errors.New("storage: event_id conflict")
+	ErrCheckpointConflict       = errors.New("storage: checkpoint conflict")
+	ErrStalePosition            = errors.New("storage: position is at or behind the checkpoint")
+	ErrCapacityReached          = errors.New("storage: outbox capacity reached")
+	ErrAgentIdentityMismatch    = errors.New("storage: agent identity mismatch")
+	ErrSourceGenerationMismatch = errors.New("storage: event source generation is not active")
+	ErrGenerationConflict       = errors.New("storage: source generation conflict")
+	ErrGenerationReuse          = errors.New("storage: retired source generation cannot be reused")
+	ErrOversizedEvent           = errors.New("storage: event exceeds the raw evidence size limit")
+	ErrInvalidEvent             = errors.New("storage: invalid event")
+	ErrInvalidConfig            = errors.New("storage: invalid config")
+	ErrInvalidLimit             = errors.New("storage: invalid pending limit")
+	ErrUnsupportedSchema        = errors.New("storage: unsupported database schema version")
+	ErrDurability               = errors.New("storage: required SQLite durability settings are not active")
 )
 
 // Config controls opening a Store.
@@ -157,7 +173,10 @@ func (s *Store) initialize(cfg Config) error {
 	if err := s.checkIntegrity(ctx); err != nil {
 		return err
 	}
-	if err := s.createSchema(ctx); err != nil {
+	if err := s.migrateSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.verifyDurability(ctx); err != nil {
 		return err
 	}
 	if err := s.initIdentity(ctx, cfg); err != nil {
@@ -195,11 +214,164 @@ func (s *Store) checkIntegrity(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) createSchema(ctx context.Context) error {
+func (s *Store) migrateSchema(ctx context.Context) error {
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return mapError(err)
+	}
+	if version > storageSchemaVersion {
+		return fmt.Errorf("%w: database is version %d, this binary supports %d",
+			ErrUnsupportedSchema, version, storageSchemaVersion)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return mapError(err)
+	}
+	defer tx.Rollback()
+
 	for _, statement := range schemaStatements {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return mapError(err)
 		}
+	}
+	if version < storageSchemaVersion {
+		if err := backfillSourceGenerations(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			fmt.Sprintf("PRAGMA user_version = %d", storageSchemaVersion)); err != nil {
+			return mapError(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return mapError(err)
+	}
+	return nil
+}
+
+// backfillSourceGenerations upgrades a version-0/1 database. Every generation
+// that already has a checkpoint is preserved, ordered by its last update, and
+// the most recently updated one becomes active. A source that already has
+// generation rows is left alone.
+func backfillSourceGenerations(ctx context.Context, tx *sql.Tx) error {
+	existing, err := sourceIDsWithGenerations(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT source_id, generation, source_type, updated_at
+		 FROM source_checkpoints
+		 ORDER BY source_id, updated_at, generation`)
+	if err != nil {
+		return mapError(err)
+	}
+	defer rows.Close()
+
+	type generationRow struct {
+		generation string
+		sourceType string
+		updatedAt  string
+	}
+	var (
+		groups  [][]generationRow
+		sources []string
+		current string
+		group   []generationRow
+	)
+	for rows.Next() {
+		var sourceID string
+		var row generationRow
+		if err := rows.Scan(&sourceID, &row.generation, &row.sourceType, &row.updatedAt); err != nil {
+			return mapError(err)
+		}
+		if sourceID != current {
+			if current != "" {
+				groups = append(groups, group)
+				sources = append(sources, current)
+			}
+			current = sourceID
+			group = nil
+		}
+		group = append(group, row)
+	}
+	if err := rows.Err(); err != nil {
+		return mapError(err)
+	}
+	if current != "" {
+		groups = append(groups, group)
+		sources = append(sources, current)
+	}
+
+	for i, sourceID := range sources {
+		if existing[sourceID] {
+			continue
+		}
+		entries := groups[i]
+		for sequence, entry := range entries {
+			active := 0
+			if sequence == len(entries)-1 {
+				active = 1
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO source_generations
+				 (source_id, generation, source_type, generation_sequence, active, created_at, retired_at)
+				 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+				sourceID, entry.generation, entry.sourceType, sequence+1, active, entry.updatedAt); err != nil {
+				return mapError(err)
+			}
+		}
+	}
+	return nil
+}
+
+func sourceIDsWithGenerations(ctx context.Context, tx *sql.Tx) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT source_id FROM source_generations`)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	ids := make(map[string]bool)
+	for rows.Next() {
+		var sourceID string
+		if err := rows.Scan(&sourceID); err != nil {
+			return nil, mapError(err)
+		}
+		ids[sourceID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapError(err)
+	}
+	return ids, nil
+}
+
+// verifyDurability fails Open if the DSN pragmas were not actually applied.
+func (s *Store) verifyDurability(ctx context.Context) error {
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return mapError(err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("%w: journal_mode is %q, want wal", ErrDurability, journalMode)
+	}
+
+	var synchronous int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		return mapError(err)
+	}
+	if synchronous != 2 { // 2 = FULL
+		return fmt.Errorf("%w: synchronous is %d, want FULL (2)", ErrDurability, synchronous)
+	}
+
+	var busyTimeout int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		return mapError(err)
+	}
+	if busyTimeout != busyTimeoutMillis {
+		return fmt.Errorf("%w: busy_timeout is %d, want %d", ErrDurability, busyTimeout, busyTimeoutMillis)
 	}
 	return nil
 }
@@ -235,6 +407,19 @@ var schemaStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS outbox_source_position
 		ON outbox (source_id, source_generation, record_number)`,
+	`CREATE TABLE IF NOT EXISTS source_generations (
+		source_id TEXT NOT NULL,
+		generation TEXT NOT NULL,
+		source_type TEXT NOT NULL,
+		generation_sequence INTEGER NOT NULL CHECK (generation_sequence > 0),
+		active INTEGER NOT NULL CHECK (active IN (0, 1)),
+		created_at TEXT NOT NULL,
+		retired_at TEXT,
+		PRIMARY KEY (source_id, generation),
+		UNIQUE (source_id, generation_sequence)
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS source_generations_one_active
+		ON source_generations (source_id) WHERE active = 1`,
 }
 
 func (s *Store) initIdentity(ctx context.Context, cfg Config) error {
@@ -270,6 +455,9 @@ func (s *Store) initIdentity(ctx context.Context, cfg Config) error {
 	case err != nil:
 		return mapError(err)
 	default:
+		if id.Generation == "" {
+			return fmt.Errorf("%w: agent metadata has an empty generation", ErrCorrupt)
+		}
 		if id.AgentID != cfg.AgentID {
 			return fmt.Errorf("%w: database agent_id %q does not match config %q",
 				ErrAgentIdentityMismatch, id.AgentID, cfg.AgentID)

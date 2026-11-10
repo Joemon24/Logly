@@ -25,7 +25,7 @@ func TestAppendPersistsEventsAndCheckpoints(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	entries, err := store.Pending(ctx, 0)
+	entries, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestAppendRollsBackOnFailure(t *testing.T) {
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
 
-			entries, err := store.Pending(ctx, 0)
+			entries, err := store.Pending(ctx, MaxPendingLimit)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +157,7 @@ func TestDuplicateSubmissionIsIdempotent(t *testing.T) {
 		t.Fatalf("duplicate events in one batch: %v", err)
 	}
 
-	entries, err := store.Pending(ctx, 0)
+	entries, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestReplayAcrossReopenReturnsOriginalPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before, err := store.Pending(ctx, 0)
+	before, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestReplayAcrossReopenReturnsOriginalPayload(t *testing.T) {
 	}
 
 	store = reopen(t, store, cfg)
-	after, err := store.Pending(ctx, 0)
+	after, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestPendingOrderLimitAndPartialAck(t *testing.T) {
 		t.Fatalf("acked = %d, want 1", acked)
 	}
 
-	remaining, err := store.Pending(ctx, 0)
+	remaining, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestCapacityLimit(t *testing.T) {
 		t.Fatalf("expected ErrCapacityReached, got %v", err)
 	}
 
-	entries, err := store.Pending(ctx, 0)
+	entries, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,14 +328,20 @@ func TestCheckpointConflictsAndNoByteOffsetSources(t *testing.T) {
 		t.Fatalf("expected lower offset conflict, got %v", err)
 	}
 
-	newGeneration := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-2", 1, int64Ptr(0))
-	if err := store.Append(ctx, []events.Event{newGeneration}); err != nil {
-		t.Fatalf("new generation should start fresh: %v", err)
-	}
-
 	mixed := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-1", 4, nil)
 	if err := store.Append(ctx, []events.Event{mixed}); !errors.Is(err, ErrCheckpointConflict) {
 		t.Fatalf("expected mixed position conflict, got %v", err)
+	}
+
+	newGeneration := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-2", 1, int64Ptr(0))
+	if err := store.Append(ctx, []events.Event{newGeneration}); !errors.Is(err, ErrSourceGenerationMismatch) {
+		t.Fatalf("rotation without an explicit transition should fail, got %v", err)
+	}
+	if _, err := store.TransitionSourceGeneration(ctx, "auth-log", events.SourceTypeFile, "gen-1", "gen-2"); err != nil {
+		t.Fatalf("transition generation: %v", err)
+	}
+	if err := store.Append(ctx, []events.Event{newGeneration}); err != nil {
+		t.Fatalf("new generation should start fresh after transition: %v", err)
 	}
 
 	journalTen := testEvent(t, store, "journal", events.SourceTypeJournald, "boot-1", 10, nil)
@@ -402,7 +408,7 @@ func TestConcurrentAppendAndHeartbeatSequence(t *testing.T) {
 		t.Fatalf("concurrent append: %v", err)
 	}
 
-	entries, err := store.Pending(ctx, 0)
+	entries, err := store.Pending(ctx, MaxPendingLimit)
 	if err != nil {
 		t.Fatal(err)
 	}

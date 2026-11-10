@@ -47,6 +47,7 @@ func (s *Store) Append(ctx context.Context, batch []events.Event) error {
 		generation string
 	}
 	states := make(map[sourceKey]*checkpointState)
+	activeGenerations := make(map[string]SourceGeneration)
 	seen := make(map[string][]byte, len(batch))
 	newEvents := 0
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -54,6 +55,11 @@ func (s *Store) Append(ctx context.Context, batch []events.Event) error {
 	for i := range batch {
 		event := batch[i]
 		if err := s.validateEvent(event); err != nil {
+			return err
+		}
+		if err := ensureActiveGeneration(ctx, tx, activeGenerations,
+			event.Collection.SourceID, event.Collection.SourceType,
+			event.Collection.Generation); err != nil {
 			return err
 		}
 
@@ -159,20 +165,18 @@ func (s *Store) validateEvent(event events.Event) error {
 	return nil
 }
 
-// Pending returns stored events in insertion order. A limit of zero or less
-// returns all pending events. Each payload is validated before it is returned;
-// a damaged payload yields ErrCorruptPayload instead of being replayed.
+// Pending returns up to limit stored events in insertion order. The limit must
+// be positive and no larger than MaxPendingLimit; this prevents an accidental
+// unbounded dispatcher read. Each payload is validated before it is returned; a
+// damaged payload yields ErrCorruptPayload instead of being replayed.
 func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxEntry, error) {
-	query := `SELECT seq, event_id, payload FROM outbox ORDER BY seq`
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if limit > 0 {
-		rows, err = s.db.QueryContext(ctx, query+" LIMIT ?", limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, query)
+	if limit < 1 || limit > MaxPendingLimit {
+		return nil, fmt.Errorf("%w: got %d, want 1..%d",
+			ErrInvalidLimit, limit, MaxPendingLimit)
 	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, event_id, payload FROM outbox ORDER BY seq LIMIT ?`, limit)
 	if err != nil {
 		return nil, mapError(err)
 	}

@@ -101,21 +101,29 @@ func (st *checkpointState) accept(sourceType events.SourceType, position events.
 			ErrCheckpointConflict, st.sourceType, sourceType)
 	}
 
-	after, err := positionAfter(position, st)
+	current := events.Position{
+		ByteOffset:   st.byteOffset,
+		RecordNumber: st.recordNumber,
+	}
+	order, err := comparePosition(position, current)
 	if err != nil {
 		return err
 	}
-	if !after {
+	switch order {
+	case positionAfter:
+		st.set(sourceType, position)
+		return nil
+	case positionStale:
 		if duplicate {
 			return nil
 		}
-		return fmt.Errorf("%w: position %s is not after stored position %s",
-			ErrCheckpointConflict, positionString(position), positionString(events.Position{
-				ByteOffset: st.byteOffset, RecordNumber: st.recordNumber,
-			}))
+		return fmt.Errorf("%w: %w: position %s is at or behind stored position %s",
+			ErrCheckpointConflict, ErrStalePosition,
+			positionString(position), positionString(current))
+	default:
+		return fmt.Errorf("%w: contradictory position %s versus stored position %s",
+			ErrCheckpointConflict, positionString(position), positionString(current))
 	}
-	st.set(sourceType, position)
-	return nil
 }
 
 func (st *checkpointState) set(sourceType events.SourceType, position events.Position) {
@@ -130,20 +138,54 @@ func (st *checkpointState) set(sourceType events.SourceType, position events.Pos
 	st.changed = true
 }
 
-func positionAfter(next events.Position, current *checkpointState) (bool, error) {
-	if (next.ByteOffset == nil) != (current.byteOffset == nil) {
-		return false, fmt.Errorf("%w: source mixes byte-offset and record-number positions",
-			ErrCheckpointConflict)
+type positionOrder int
+
+const (
+	positionStale positionOrder = iota
+	positionAfter
+	positionContradictory
+)
+
+// comparePosition defines the authoritative checkpoint ordering:
+//
+//   - byte-based sources (byte_offset present): both byte_offset and
+//     record_number must advance strictly; either one moving backward or
+//     standing still while the other advances is contradictory;
+//   - record-number sources (no byte_offset): record_number must advance
+//     strictly.
+//
+// Gaps are allowed. The relationship is monotonic, not contiguous, because a
+// collector may legitimately skip source records that produce no event.
+func comparePosition(next, current events.Position) (positionOrder, error) {
+	if (next.ByteOffset == nil) != (current.ByteOffset == nil) {
+		return positionStale, fmt.Errorf(
+			"%w: source mixes byte-offset and record-number positions", ErrCheckpointConflict)
 	}
 	if next.ByteOffset != nil {
-		return *next.ByteOffset > *current.byteOffset, nil
+		offsetAfter := *next.ByteOffset > *current.ByteOffset
+		offsetNotAfter := *next.ByteOffset <= *current.ByteOffset
+		recordAfter := next.RecordNumber > current.RecordNumber
+		recordNotAfter := next.RecordNumber <= current.RecordNumber
+
+		switch {
+		case offsetAfter && recordAfter:
+			return positionAfter, nil
+		case offsetNotAfter && recordNotAfter:
+			return positionStale, nil
+		default:
+			return positionContradictory, nil
+		}
 	}
-	return next.RecordNumber > current.recordNumber, nil
+	if next.RecordNumber > current.RecordNumber {
+		return positionAfter, nil
+	}
+	return positionStale, nil
 }
 
 func positionString(position events.Position) string {
 	if position.ByteOffset != nil {
-		return fmt.Sprintf("byte_offset=%d", *position.ByteOffset)
+		return fmt.Sprintf("byte_offset=%d record_number=%d",
+			*position.ByteOffset, position.RecordNumber)
 	}
 	return fmt.Sprintf("record_number=%d", position.RecordNumber)
 }

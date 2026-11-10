@@ -114,6 +114,17 @@ func testEvent(t *testing.T, store *Store, sourceID string, sourceType events.So
 	return event
 }
 
+func withRaw(t *testing.T, event events.Event, raw string) events.Event {
+	t.Helper()
+	event.Raw.Data = raw
+	id, err := event.ComputeEventID()
+	if err != nil {
+		t.Fatalf("compute event id: %v", err)
+	}
+	event.EventID = id
+	return event
+}
+
 func TestOpenPersistsIdentityPermissionsAndSchema(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Path = filepath.Join(t.TempDir(), "nested", "outbox.db")
@@ -179,6 +190,109 @@ func TestDurabilityPragmasAndBoundedPool(t *testing.T) {
 	}
 	if busyTimeout != busyTimeoutMillis {
 		t.Fatalf("busy_timeout = %d, want %d", busyTimeout, busyTimeoutMillis)
+	}
+}
+
+func TestPendingRequiresPositiveBoundedLimit(t *testing.T) {
+	store := openTestStore(t, testConfig(t))
+	ctx := context.Background()
+
+	for _, limit := range []int{-1, 0, MaxPendingLimit + 1} {
+		if _, err := store.Pending(ctx, limit); !errors.Is(err, ErrInvalidLimit) {
+			t.Fatalf("Pending(%d) error = %v, want ErrInvalidLimit", limit, err)
+		}
+	}
+
+	event := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-1", 1, int64Ptr(100))
+	if err := store.Append(ctx, []events.Event{event}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.Pending(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPayloads(t, entries, event)
+}
+
+func TestSchemaVersioningAndGenerationMigration(t *testing.T) {
+	cfg := testConfig(t)
+	store := openTestStore(t, cfg)
+	ctx := context.Background()
+
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != storageSchemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, storageSchemaVersion)
+	}
+
+	first := testEvent(t, store, "migrate-source", events.SourceTypeFile, "gen-1", 1, int64Ptr(100))
+	if err := store.Append(ctx, []events.Event{first}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TransitionSourceGeneration(ctx,
+		"migrate-source", events.SourceTypeFile, "gen-1", "gen-2"); err != nil {
+		t.Fatal(err)
+	}
+	second := testEvent(t, store, "migrate-source", events.SourceTypeFile, "gen-2", 1, int64Ptr(0))
+	if err := store.Append(ctx, []events.Event{second}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`DELETE FROM source_generations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store = openTestStore(t, cfg)
+	active, ok, err := store.ActiveGeneration(ctx, "migrate-source")
+	if err != nil || !ok {
+		t.Fatalf("active generation after migration: ok=%v err=%v", ok, err)
+	}
+	if active.Generation != "gen-2" || active.Sequence != 2 {
+		t.Fatalf("active generation = %+v, want gen-2 sequence 2", active)
+	}
+	if _, err := store.TransitionSourceGeneration(ctx,
+		"migrate-source", events.SourceTypeFile, "gen-2", "gen-1"); !errors.Is(err, ErrGenerationReuse) {
+		t.Fatalf("expected ErrGenerationReuse after migration, got %v", err)
+	}
+
+	entries, err := store.Pending(ctx, MaxPendingLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("pending after migration = %d, want 2", len(entries))
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 99`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(cfg); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("expected ErrUnsupportedSchema, got %v", err)
 	}
 }
 
@@ -277,7 +391,7 @@ func TestCorruptStoredPayloadIsRejectedOnRead(t *testing.T) {
 	}
 
 	store = openTestStore(t, cfg)
-	if _, err := store.Pending(context.Background(), 0); !errors.Is(err, ErrCorruptPayload) {
+	if _, err := store.Pending(context.Background(), MaxPendingLimit); !errors.Is(err, ErrCorruptPayload) {
 		t.Fatalf("expected ErrCorruptPayload, got %v", err)
 	}
 }
