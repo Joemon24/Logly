@@ -22,11 +22,18 @@ var (
 )
 
 func parseSecurityLine(line string) (authRecord, bool, error) {
-	if sshPrefix.MatchString(line) {
-		return parseAuthLine(line)
+	record, relevant, err := parseAuthLine(line)
+	if err != nil {
+		// readFrom has bounded this complete line. Keep a durable event with
+		// no inferred actor or outcome so a parse failure cannot pin the file.
+		return authRecord{
+			Category: events.CategoryAuthentication,
+			Action:   "ssh_unparsed", Outcome: "unknown",
+			Evidence: strings.ToValidUTF8(line, "?"),
+		}, true, nil
 	}
-	if record, relevant, err := parseAuthLine(line); relevant {
-		return record, true, err
+	if relevant || sshPrefix.MatchString(line) {
+		return record, relevant, nil
 	}
 	if match := sudoLine.FindStringSubmatch(line); match != nil {
 		body := match[2]

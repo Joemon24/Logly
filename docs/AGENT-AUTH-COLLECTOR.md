@@ -138,12 +138,14 @@ and unwraps to `ErrRejectedRecord`.
 |---|---|
 | Unrelated/authless line | Ignored; consumes the next physical record number, advances the checkpoint through `AdvanceCheckpoint`, and produces no event. |
 | Oversized line (> `events.MaxRawEvidenceBytes`, 64 KiB including newline) | `ErrOversizedRecord` and `ErrRejectedRecord`; checkpoint not advanced. |
-| SSH authentication-looking line that cannot be parsed | `ErrRejectedRecord`; checkpoint not advanced. |
+| Bounded SSH authentication line that cannot be parsed | Stored as `ssh_unparsed` with unknown outcome and no source or target. The outbox write advances the checkpoint atomically. |
 | Line that parses but fails event validation/ID derivation | `ErrRejectedRecord`; checkpoint not advanced. |
 
 A rejection is evaluated before the checkpoint is advanced, so an ignored line
-can be checkpointed while the malformed or oversized security record after it
-stops collection at its own position.
+can be checkpointed while the oversized security record after it stops
+collection at its own position. Unparsed SSH evidence is searchable by action.
+Invalid UTF-8 runs in this evidence are replaced with `?` to keep IDs stable
+through JSON encoding.
 
 There is no rejection ledger. The operator must inspect the error and either fix
 the source, rotate/truncate it (which creates a new generation), or explicitly
@@ -152,15 +154,16 @@ record or advances the checkpoint past it.
 
 ## Parsing coverage
 
-The parser recognizes these OpenSSH messages anywhere in a line, with or
-without a syslog prefix:
+The parser recognizes these messages at the start of a line or immediately
+after a recognized OpenSSH syslog prefix:
 
-- `Failed password|publickey|keyboard-interactive/pam for [invalid|illegal user] USER from IP [port N]`
-- `Accepted password|publickey|keyboard-interactive/pam for USER from IP [port N]`
-- `Invalid user USER from IP [port N]`
+- `Failed password|publickey|keyboard-interactive/pam for [invalid|illegal user] USER from IP port N ssh2`
+- `Accepted password|publickey|keyboard-interactive/pam for USER from IP port N ssh2`
+- `Invalid user USER from IP port N`
 
-IPv4 and IPv6 are accepted as opaque address strings; no address family
-restriction is applied. Events use:
+IPv4 and IPv6 addresses and the port are validated. Usernames can contain
+spaces. Login messages with more than one plausible endpoint become unparsed
+evidence. Parsed events use:
 
 - category `authentication`
 - action `ssh_login` (or `ssh_invalid_user` for an `Invalid user` notice)
@@ -212,8 +215,9 @@ corrupt, closed, or full-disk database is not retried silently.
 - repeated truncation into distinct `-t<N>` generations
 - outbox capacity backpressure with interleaved ignored records, acknowledgement,
   and exact retry without lost or duplicated security events
-- malformed SSH records after ignored records, and oversized records without
-  checkpoint movement past the rejection
+- unparsed SSH evidence after ignored records, with continued collection
+  and restart recovery
+- oversized records without checkpoint movement past the rejection
 - injected storage failures followed by an identical-payload retry
 - temporary source I/O failure and recovery
 
@@ -265,9 +269,9 @@ corrupt, closed, or full-disk database is not retried silently.
    polling once, and confirming the second event is not lost. `Ack` the first
    event and poll again.
 
-5. Verify rejection handling by appending a malformed
-   `sshd[...]: Failed password for ...` line. The poll must return
-   `ErrRejectedRecord`, and the checkpoint must stay at the previous record.
+5. Append a malformed SSH authentication line followed by a valid one. The
+   collector must persist an `ssh_unparsed` record and the subsequent event,
+   then resume at the next record after restart.
 
 ## Known limitations
 

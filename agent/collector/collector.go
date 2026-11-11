@@ -224,9 +224,9 @@ func New(cfg Config) (*Collector, error) {
 // A capacity failure returns ErrBackpressure (wrapping
 // storage.ErrCapacityReached) and keeps the unpersisted event for the next
 // call. A read failure returns ErrSourceIO and leaves the position unchanged.
-// A malformed SSH record returns *RejectedRecordError and leaves the position
-// unchanged. Other storage failures return ErrStorage and also leave the
-// position unchanged.
+// Bounded malformed SSH records are persisted as unparsed evidence. An
+// oversized record returns *RejectedRecordError. Other storage failures
+// return ErrStorage and leave the position unchanged.
 func (c *Collector) Poll(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err

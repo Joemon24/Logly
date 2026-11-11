@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,7 +154,9 @@ func TestParseSecurityLineAdversarialSSHInput(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			record, relevant, err := parseSecurityLine(tc.line)
-			if relevant != tc.relevant || (err != nil) != tc.reject || record.User != tc.user {
+			if relevant != tc.relevant || err != nil || record.User != tc.user ||
+				(record.Action == "ssh_unparsed") != tc.reject ||
+				(tc.reject && (record.IP != "" || record.Outcome != "unknown")) {
 				t.Fatalf("parsed %+v, relevant=%v, err=%v", record, relevant, err)
 			}
 		})
@@ -171,4 +174,43 @@ func TestParseAuthTimestampDoesNotNormalizeInvalidCalendarDate(t *testing.T) {
 	if got, ok := parseAuthTimestamp("Feb 29 10:15:30 node sshd[1]: message", leap); !ok || got.Day() != 29 {
 		t.Fatalf("valid leap day = %v, ok=%v", got, ok)
 	}
+}
+
+func TestSSHUsernameWithSpacesKeepsRecordedEndpoint(t *testing.T) {
+	for _, tc := range []struct{ line, user string }{
+		{"Invalid user two words from 192.0.2.7 port 50000", "two words"},
+		{"Failed password for invalid user two words from 192.0.2.7 port 50000 ssh2", "two words"},
+		{"Invalid user a from 198.51.100.9 port 22 ssh2: b from 192.0.2.7 port 50000", "a from 198.51.100.9 port 22 ssh2: b"},
+	} {
+		record, relevant, err := parseAuthLine(tc.line)
+		if err != nil || !relevant || record.User != tc.user || record.IP != "192.0.2.7" {
+			t.Errorf("parsed %+v, relevant=%v, err=%v", record, relevant, err)
+		}
+	}
+}
+
+func FuzzSSHUsernameEndpoint(f *testing.F) {
+	f.Add("two words")
+	f.Add("first from 198.51.100.9 port 22 ssh2: second")
+	f.Fuzz(func(t *testing.T, user string) {
+		if len(user) > 100 || strings.ContainsAny(user, "\r\n") {
+			return
+		}
+		for _, form := range []struct{ prefix, suffix string }{
+			{"Invalid user ", ""},
+			{"Failed publickey for invalid user ", " ssh2: RSA SHA256:fixture"},
+		} {
+			record, relevant, err := parseSecurityLine(form.prefix + user + " from 192.0.2.7 port 50000" + form.suffix)
+			if err != nil || !relevant {
+				t.Fatalf("expected authentication evidence, got %+v, relevant=%v, err=%v", record, relevant, err)
+			}
+			if record.Action == "ssh_unparsed" {
+				if record.IP != "" || record.Outcome != "unknown" {
+					t.Fatalf("unparsed record has inferred attribution: %+v", record)
+				}
+			} else if record.IP != "192.0.2.7" {
+				t.Fatalf("incorrectly attributed record: %+v", record)
+			}
+		}
+	})
 }
