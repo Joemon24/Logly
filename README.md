@@ -54,13 +54,17 @@ The read-only Investigator uses stored evidence to reproduce an incident rule wh
 
 | Check | Recorded result |
 | --- | --- |
-| Docker-backed integration on macOS | **53 passed, 0 failed** across 14 scenarios, including broker outage, restart, deduplication, and Elasticsearch recovery |
-| Python | **59 tests passed**, plus **16 passing subtests** |
-| Go | **106 top-level tests passed** with the race detector across 8 test packages. `go vet` passed. |
-| Frontend | **10 tests passed**. Lint, type checks, and both production builds passed. |
-| npm audit | **0 vulnerabilities** reported in the verification run |
+| Docker-backed integration on macOS | **53 passed, 0 failed** across 14 scenarios, including Kafka outage, restart, deduplication, and Elasticsearch recovery |
+| Ubuntu x86_64 CI executable smoke test | **Passed:** actual `agent-v2` binary collected a fixture, persisted SQLite checkpoints and outbox events, resumed after restart with stable IDs, and drained a renamed log before reading its replacement. This test deliberately did **not** connect to Kafka. |
+| Python | **72 tests passed**, plus **31 passing subtests** in the Groq change verification |
+| Go | **106 top-level tests passed** with the race detector across 8 packages; `go vet` passed |
+| Frontend | **11 tests passed** in the Groq change verification; lint, type checks, and both production builds passed |
+| Groq topic routing | **36/40 (90%)** initial and **35/40 (87.5%)** on an unchanged 40-question synthetic rerun; **0 fallbacks** in both runs. This measures question routing, not attack detection or investigative accuracy |
+| npm audit | **0 vulnerabilities** reported in the earlier verification run |
 
-The outage test confirmed that a failed Elasticsearch write left the Kafka offset uncommitted. After recovery, the consumer stored one copy and committed offset 1 with zero lag. See the [real-stack verification procedure](docs/V2-INTEGRATION-VERIFICATION.md).
+The macOS integration outage test confirmed that a failed Elasticsearch write left the Kafka offset uncommitted. After recovery, the consumer stored one copy and committed offset 1 with zero lag. See the [real-stack verification procedure](docs/V2-INTEGRATION-VERIFICATION.md).
+
+The [Ubuntu CI job](https://github.com/Joemon24/Logly/actions/runs/43007524111/job/130478602707) builds and launches the actual Go agent with a disposable log and SQLite state. It verifies four distinct persisted events across restart and rename-and-create rotation. The broker address is intentionally unavailable, so this validates Linux collection durability **up to the outbox**, not Ubuntu-to-Kafka delivery. The test is reproducible via [`scripts/smoke-agent-v2.py`](scripts/smoke-agent-v2.py) and explained in the [Ubuntu verification guide](docs/LINUX-DEPLOYMENT.md).
 
 ## Run locally
 
@@ -135,7 +139,7 @@ npm audit
 
 ## Current limitations
 
-- **Ubuntu validation:** Live auditd, systemd, and file-watch operation still need verification on Ubuntu. The real-stack checks ran on macOS with fixture data.
+- **Ubuntu validation:** The `agent-v2` executable passed a fixture-driven collection, restart, and log-rotation smoke test on an Ubuntu x86_64 GitHub Actions runner. Real SSH-generated logs, auditd, systemd service operation, live file watches, Ubuntu-to-Kafka delivery, and a continuously running Linux deployment remain unverified. The separate Docker-backed full-pipeline integration checks ran on macOS with synthetic data.
 - **Anomaly detection:** Isolation Forest is experimental and runs offline. It has no effect on incident decisions, and accuracy on representative data is unmeasured.
 - **LLM evaluation:** The 40-question synthetic evaluation measures routing only. Broader routing and investigation quality have yet to be measured.
 - **Deployment boundary:** FastAPI is unauthenticated and intended for private development only. Keep it and the development data services on a trusted local network.
