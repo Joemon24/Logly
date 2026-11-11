@@ -6,15 +6,33 @@ summaries, with full evidence available on the incident detail endpoint.
 """
 from typing import Optional
 
-from elasticsearch import NotFoundError
-from fastapi import FastAPI, HTTPException
+from elasticsearch import ApiError, NotFoundError
+from elastic_transport import TransportError
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.incident_intelligence import EVENT_INDEX, INCIDENT_INDEX
 from api.settings import elasticsearch_client
+from api.investigator import InvestigationTools, configured_provider, investigate
 
 es = elasticsearch_client()
 
 app = FastAPI(title="Logly incident API")
+
+MAX_RESULT_WINDOW = 10_000
+MAX_TIMELINE_EVENTS = 500
+
+
+@app.exception_handler(TransportError)
+async def storage_transport_error(_request: Request, _error: TransportError):
+    return JSONResponse(status_code=503, content={"detail": "telemetry storage unavailable"})
+
+
+@app.exception_handler(ApiError)
+async def storage_api_error(_request: Request, _error: ApiError):
+    return JSONResponse(status_code=503, content={"detail": "telemetry storage query failed"})
+
 
 EVENT_FIELDS = (
     "event_id", "storage_id", "timestamp", "@timestamp", "agent", "event",
@@ -29,14 +47,20 @@ def _client(client):
 
 def _search_or_empty(client, **kwargs):
     try:
-        return client.search(**kwargs)
+        result = client.search(allow_partial_search_results=False, **kwargs)
+        if result.get("timed_out") or result.get("_shards", {}).get("failed"):
+            raise HTTPException(status_code=503, detail="incomplete telemetry search")
+        return result
     except NotFoundError:
         return {}
 
 
 def _count_or_zero(client, **kwargs):
     try:
-        return client.count(**kwargs).get("count", 0)
+        result = client.count(**kwargs)
+        if result.get("_shards", {}).get("failed") or "count" not in result:
+            raise HTTPException(status_code=503, detail="incomplete telemetry count")
+        return result["count"]
     except NotFoundError:
         return 0
 
@@ -55,7 +79,7 @@ def event_summary(source):
     return {field: source[field] for field in EVENT_FIELDS if field in source}
 
 
-def _event_query(agent_id=None, source_ip=None, outcome=None, username=None, since=None):
+def _event_query(agent_id=None, source_ip=None, outcome=None, username=None, since=None, category=None):
     filters = []
     if agent_id:
         filters.append({"term": {"agent.agent_id.keyword": agent_id}})
@@ -65,19 +89,23 @@ def _event_query(agent_id=None, source_ip=None, outcome=None, username=None, sin
         filters.append({"term": {"outcome.keyword": outcome}})
     if username:
         filters.append({"term": {"username.keyword": username}})
+    if category:
+        filters.append({"term": {"event.category.keyword": category}})
     if since:
         filters.append({"range": {"timestamp": {"gte": since}}})
     return {"bool": {"filter": filters}} if filters else {"match_all": {}}
 
 
 def list_events(limit=50, offset=0, agent_id=None, source_ip=None, outcome=None,
-                username=None, since=None, client=None):
+                username=None, since=None, client=None, category=None):
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
+    if offset + limit > MAX_RESULT_WINDOW:
+        raise HTTPException(status_code=422, detail="offset and limit exceed the 10000-record search window")
     response = _search_or_empty(
         _client(client),
         index=EVENT_INDEX,
-        query=_event_query(agent_id, source_ip, outcome, username, since),
+        query=_event_query(agent_id, source_ip, outcome, username, since, category),
         sort=[{"timestamp": {"order": "desc", "unmapped_type": "date"}}],
         from_=offset,
         size=limit,
@@ -115,6 +143,8 @@ def list_incidents(limit=50, offset=0, severity=None, attack_type=None,
                    status=None, source_ip=None, host=None, client=None):
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
+    if offset + limit > MAX_RESULT_WINDOW:
+        raise HTTPException(status_code=422, detail="offset and limit exceed the 10000-record search window")
     response = _search_or_empty(
         _client(client),
         index=INCIDENT_INDEX,
@@ -158,7 +188,9 @@ def get_incident(incident_id, client=None):
     except NotFoundError:
         raise HTTPException(status_code=404, detail="incident not found")
     incident = response.get("_source", {})
-    timeline, missing = _timeline(client, incident.get("event_ids", []))
+    references = incident.get("event_ids", [])
+    timeline, missing = _timeline(client, references[:MAX_TIMELINE_EVENTS])
+    incident["omitted_event_count"] = max(0, len(references) - MAX_TIMELINE_EVENTS)
     incident["timeline"] = timeline
     incident["evidence_event_count"] = len(timeline)
     incident["missing_event_ids"] = missing
@@ -242,22 +274,22 @@ def overview_endpoint():
 
 
 @app.get("/api/events")
-def events_endpoint(limit: int = 50, offset: int = 0,
-                    agent_id: Optional[str] = None,
-                    source_ip: Optional[str] = None,
-                    outcome: Optional[str] = None,
-                    username: Optional[str] = None,
-                    since: Optional[str] = None):
-    return list_events(limit, offset, agent_id, source_ip, outcome, username, since)
+def events_endpoint(limit: int = 50, offset: int = Query(0, ge=0, lt=MAX_RESULT_WINDOW),
+                    agent_id: Optional[str] = Query(None, max_length=256),
+                    source_ip: Optional[str] = Query(None, max_length=64),
+                    outcome: Optional[str] = Query(None, max_length=40),
+                    username: Optional[str] = Query(None, max_length=256),
+                    since: Optional[str] = Query(None, max_length=64), category: Optional[str] = Query(None, max_length=40)):
+    return list_events(limit, offset, agent_id, source_ip, outcome, username, since, category=category)
 
 
 @app.get("/api/incidents")
-def incidents_endpoint(limit: int = 50, offset: int = 0,
-                       severity: Optional[str] = None,
-                       attack_type: Optional[str] = None,
-                       status: Optional[str] = None,
-                       source_ip: Optional[str] = None,
-                       host: Optional[str] = None):
+def incidents_endpoint(limit: int = 50, offset: int = Query(0, ge=0, lt=MAX_RESULT_WINDOW),
+                       severity: Optional[str] = Query(None, max_length=32),
+                       attack_type: Optional[str] = Query(None, max_length=128),
+                       status: Optional[str] = Query(None, max_length=32),
+                       source_ip: Optional[str] = Query(None, max_length=64),
+                       host: Optional[str] = Query(None, max_length=256)):
     return list_incidents(
         limit, offset, severity, attack_type, status, source_ip, host,
     )
@@ -276,3 +308,18 @@ def hosts_endpoint(limit: int = 50):
 @app.get("/api/hosts/{host}")
 def host_endpoint(host: str, limit: int = 50):
     return host_history(host, limit)
+
+
+class InvestigationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(default="", max_length=400)
+
+
+@app.post("/api/incidents/{incident_id}/investigate")
+def investigate_endpoint(incident_id: str, request: InvestigationRequest):
+    if not 1 <= len(incident_id) <= 160:
+        raise HTTPException(status_code=422, detail="invalid incident reference")
+    try:
+        return investigate(InvestigationTools(es), incident_id, request.question.strip(), configured_provider())
+    except NotFoundError as error:
+        raise HTTPException(status_code=404, detail="incident not found") from error

@@ -205,3 +205,21 @@ tbody th { font-weight: 570; }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; }
 }
+
+.investigator { padding: 20px; border: 1px solid var(--line); margin-block: 24px; }
+.investigator h2 { margin: 0 0 14px; font-size: 1.125rem; }
+.investigator label { display: block; margin-bottom: 6px; }
+.investigator-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.investigator-controls input { flex: 1 1 270px; min-width: 0; max-width: 540px; min-height: 42px; border: 1px solid var(--line); border-radius: 4px; padding: 0 9px; background: var(--porcelain); }
+.investigator-answer { margin-top: 20px; overflow-wrap: anywhere; }
+.investigator-answer h3 { font-size: 1rem; margin-bottom: 6px; }
+.investigator-answer p, .investigator-answer ul { margin-top: 0; }
+.investigator-answer details { margin-block: 6px 12px; }
+.investigator-controls select { min-height: 42px; max-width: 100%; border: 1px solid var(--line); padding-inline: 9px; background: var(--porcelain); }
+.lab-shell { width: min(100%, 1100px); margin-inline: auto; }
+.lab-empty { padding-inline: 15px; }
+
+.lab-table { min-width: 640px; }
+.investigator [role="status"] { margin-top: 12px; }
+
+.event-table tr:target { background: var(--wash); outline: 1px solid var(--graphite); outline-offset: -1px; scroll-margin-top: 64px; }

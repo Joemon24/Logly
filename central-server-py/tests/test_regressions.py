@@ -10,6 +10,10 @@ class PolicyTests(unittest.TestCase):
         _, due = alert_due(event, datetime.now(timezone.utc), {})
         self.assertTrue(due)
 
+    def test_v2_evidence_does_not_trigger_legacy_soar(self):
+        event = {'schema_version': 2, 'agent': {'agent_id': 'a'}, 'alert_type': 'brute_force', 'src_ip': '192.0.2.1', 'severity': 'critical'}
+        self.assertFalse(alert_due(event, datetime.now(timezone.utc), {})[1])
+
     def test_cooldown_keeps_evidence(self):
         event = {'agent': {'agent_id': 'a'}, 'alert_type': 'brute_force', 'src_ip': '192.0.2.1', 'severity': 'high', 'raw': 'evidence'}
         now = datetime.now(timezone.utc)

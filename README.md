@@ -1,207 +1,50 @@
-> **Release candidate:** See [readiness report](docs/READINESS.md) and [Linux deployment guide](docs/LINUX-DEPLOYMENT.md). This build uses real log inputs, defaults to detection-only recommendations, and does not implement firewall blocking. Historical feature claims below are not a production-readiness guarantee.
+# Logly v2.0
 
-# Distributed AI-Powered IDS + SOAR Platform
+Logly collects Linux security telemetry and ties SSH detections to their supporting events. The React SOC dashboard supports event search, incident timelines, host history and an evidence-grounded Investigator. The standalone Simulation Lab uses four recorded synthetic fixtures.
 
-A distributed Intrusion Detection and Response System built using:
+| Component | Verification status |
+| --- | --- |
+| Go v2 file checkpoints, SQLite outbox, Kafka dispatch and replay | VERIFIED by automated and local real-stack tests. |
+| SSH brute force, password spraying and suspicious successful login | VERIFIED by labeled fixtures and local real-stack tests. |
+| Sudo, account changes, selected audit executions and watched-file access | VERIFIED through the local stack with fixture records. Live Ubuntu auditd and systemd remain unverified. |
+| Incident Investigator and deterministic fallback | VERIFIED by fixture tests, live Elasticsearch queries and a local Ollama routing smoke check. |
+| Simulation Lab | VERIFIED by recorded rule replay and standalone build. Public deployment is pending. |
+| Isolation Forest | EXPERIMENTAL. The offline pipeline is available. Representative training and evaluation data have not been supplied. |
+| Authenticated public SOC, automatic response, and comprehensive Linux audit coverage | NOT IMPLEMENTED. |
 
-- Go Agents
-- Apache Kafka
-- Python ML Detection Engine
-- Elasticsearch
-- Kibana
-- SOAR Automation
+## Local development
 
-This project detects:
-- Brute Force Attacks
-- Password Spraying
-- Lateral Movement
-- Behavioral Anomalies
+Use Python 3.12 or 3.13, Go 1.23+, Node compatible with the pinned Vite version, and Docker Compose for Kafka and Elasticsearch. Use a dedicated local test environment. The default Compose detector consumes the v1 topic. The v2 integration script launches its own v2 consumer and agent.
 
-using Machine Learning + Rule-Based Detection.
-
----
-
-# Architecture
-
-Attack Simulator
-        ↓
-Kafka Producer
-        ↓
-Kafka Broker
-        ↓
-Python Detection Engine
-        ↓
-Feature Engineering
-        ↓
-Isolation Forest ML
-        ↓
-Risk Scoring Engine
-        ↓
-SOAR Automation
-        ↓
-Elasticsearch
-        ↓
-Kibana Dashboard
-
----
-
-# Features
-
-## Distributed Agents
-- Go-based telemetry agents
-- Kafka streaming
-- Heartbeat monitoring
-
-## AI Detection Engine
-- Isolation Forest anomaly detection
-- Behavioral analytics
-- Dynamic trust scoring
-
-## Attack Detection
-- Brute Force Detection
-- Password Spraying Detection
-- Lateral Movement Detection
-- Generic Anomaly Detection
-
-## SOAR Automation
-- Alert creation
-- Incident creation
-- Automatic IP blocking
-- Notification system
-
-## MITRE ATT&CK Mapping
-- T1110
-- T1110.003
-- TA0008
-- T1078
-
-## Dashboarding
-- Kibana visualizations
-- Real-time security analytics
-- Alerts & incident tracking
-
----
-
-# Technologies Used
-
-- Python
-- Go
-- Apache Kafka
-- Elasticsearch
-- Kibana
-- Scikit-learn
-- NumPy
-
----
-
-# Setup Instructions
-
-## 1. Clone Repository
-
-```bash
-git clone <YOUR_REPO_URL>
-cd distributed-ids
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r central-server-py/requirements.txt
+PYTHON="$PWD/.venv/bin/python" bash scripts/verify-v2-integration.sh
 ```
-2. Install Python Dependencies
-```bash
+
+The opt-in suite stops and restarts local Kafka and Elasticsearch as part of outage tests. It needs Docker access and leaves synthetic verification records in the configured local stack. See [stack verification](docs/V2-INTEGRATION-VERIFICATION.md) before running.
+
+With Elasticsearch accessible on a trusted loopback endpoint, start the read API and dashboard in separate terminals.
+
+```sh
 cd central-server-py
-pip install -r requirements.txt
+ES_HOST=http://127.0.0.1:9200 ../.venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
-3. Start Kafka
 
-Ensure Kafka is running on:
+```sh
+cd frontend
+npm ci
+npm run dev
 ```
-localhost:19092
-```
-4. Start Elasticsearch
-```
-http://localhost:9200
-```
-5. Start Kibana
-```
-http://localhost:5601
-```
-6. Run Detection Engine
-```
-cd central-server-py
 
-python -m api.kafka_consumer
-```
-7. Run Agent
-```
-cd agent
+For a standalone walkthrough, run `npm run build:lab` in `frontend`, then serve only `dist-lab` with a static server and open `lab.html`. Its data is generated from checked-in synthetic fixtures. For local preview use `python3 -m http.server 4173 --bind 127.0.0.1 --directory dist-lab`.
 
-go run cmd/agent/main.go
-```
-8. Simulate Attacks
+## Engineering and release review
 
-Normal Traffic
-```
-python3 simulate_attacks.py normal
-```
-Brute Force
-```
-python3 simulate_attacks.py brute_force
-```
-Password Spraying
-```
-python3 simulate_attacks.py spraying
-```
-Lateral Movement
-```
-python3 simulate_attacks.py lateral
-```
-Mixed Attack Mode
-```
-python3 simulate_attacks.py mixed
-```
-Elasticsearch Indices
-
-* ids-events
-* ids-alerts
-* ids-incidents
-* ids-blocked
-
-Kibana Dashboard
-
-Import the exported Kibana .ndjson dashboard file from:
-
-```
-Stack Management → Saved Objects → Import
-```
-Detection Logic
-
-Brute Force
-
-* High fail streak
-* High failed ratio
-* Repeated failures against same user
-
-Password Spraying
-
-* Same IP attacking many users
-* High failed ratio
-* Rapid authentication attempts
-
-Lateral Movement
-
-* Same user accessing many internal systems rapidly
-
-⸻
-
-Future Improvements
-
-* Docker Compose deployment
-* Real-time WebSocket notifications
-* Firewall integration
-* Slack/Telegram alerts
-* Advanced ML models
-* Threat intelligence integration
-* MITRE ATT&CK heatmaps
-
-Author
-
-Joemon Joy
-
-
-
+- [Completion guide and known limitations](docs/V2-COMPLETION.md)
+- [Ubuntu v2 validation](docs/LINUX-DEPLOYMENT.md)
+- [Go v2 runtime](docs/AGENT-V2-RUNTIME.md) and [schema](docs/AGENT-SCHEMA-V2.md)
+- [Python delivery and deduplication](docs/PYTHON-CONSUMER-V2.md)
+- [Incident rules and evidence](docs/INCIDENT-INTELLIGENCE.md)
+- [Dashboard development](frontend/README.md)

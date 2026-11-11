@@ -5,8 +5,8 @@ export type LogEvent = {
   '@timestamp'?: string
   agent?: { agent_id?: string }
   event?: { category?: string; action?: string; outcome?: string }
-  source?: { ip?: string }
-  target?: { name?: string }
+  source?: { ip?: string; name?: string; entity_type?: string }
+  target?: { name?: string; path?: string }
   collection?: { source_id?: string; path?: string; position?: { record_number?: number } }
   src_ip?: string
   username?: string
@@ -29,13 +29,28 @@ export type Incident = {
   usernames?: string[]
   mitre_technique?: string
   evidence?: { failure_count: number; success_count: number }
+  mitre?: string
   event_ids?: string[]
 }
 
 export type IncidentDetail = Incident & {
   timeline: LogEvent[]
+  omitted_event_count?: number
   evidence_event_count: number
   missing_event_ids: string[]
+}
+
+export type Investigation = {
+  incident_id: string
+  mode: 'deterministic' | 'ollama'
+  topic: string
+  rule: string
+  reproduced: boolean
+  observations: { text: string; event_ids: string[] }[]
+  gaps: string[]
+  recommendations: string[]
+  related_incident_ids: string[]
+  host_history: { host: string; event_total: number; incident_total: number }[]
 }
 
 export type Overview = {
@@ -70,18 +85,27 @@ function valid(path: string, body: Record<string, unknown>) {
   if (path === '/overview') return ['events', 'incidents', 'open_incidents', 'hosts'].every(key => number(body[key])) && counts(body.by_severity) && counts(body.by_attack_type)
   if (path === '/events') return number(body.total) && list(body.events)
   if (path === '/incidents') return number(body.total) && list(body.incidents)
+  if (path.endsWith('/investigate')) {
+    const strings = (items: unknown) => Array.isArray(items) && items.every(item => typeof item === 'string')
+    return typeof body.incident_id === 'string' && ['deterministic', 'ollama'].includes(String(body.mode))
+      && typeof body.topic === 'string' && typeof body.rule === 'string' && typeof body.reproduced === 'boolean'
+      && strings(body.gaps) && strings(body.recommendations) && strings(body.related_incident_ids)
+      && Array.isArray(body.observations) && body.observations.every(item => object(item) && typeof item.text === 'string' && strings(item.event_ids))
+      && Array.isArray(body.host_history) && body.host_history.every(item => object(item) && typeof item.host === 'string' && number(item.event_total) && number(item.incident_total))
+  }
   if (path.startsWith('/incidents/')) return typeof body.incident_id === 'string' && list(body.timeline) && number(body.evidence_event_count) && Array.isArray(body.missing_event_ids)
   if (path === '/hosts') return list(body.hosts)
   return typeof body.host === 'string' && number(body.event_total) && number(body.incident_total) && list(body.events) && list(body.incidents)
 }
 
-export async function request<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+export async function request<T>(endpoint: string, signal?: AbortSignal, json?: { question: string }): Promise<T> {
   let response: Response
   try {
     const timeout = AbortSignal.timeout(15000)
     response = await fetch('/api' + endpoint, {
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...(json && { 'Content-Type': 'application/json' }) },
+      ...(json && { method: 'POST', body: JSON.stringify(json) }),
     })
   } catch {
     throw new ApiError('disconnected', 'Could not reach the Logly API. Check the API connection and retry.')
@@ -100,6 +124,7 @@ export async function request<T>(endpoint: string, signal?: AbortSignal): Promis
 }
 
 export const PAGE_SIZE = 25
+export const MAX_PAGES = 10_000 / PAGE_SIZE
 export const ACTIVITY_LIMIT = 500
 
 export function listEndpoint(path: '/events' | '/incidents', filters: URLSearchParams, allowed: readonly string[], page: number) {

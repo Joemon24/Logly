@@ -628,6 +628,63 @@ check "event search filters by host and outcome" "[ \"$EVENT_TOTAL\" = 5 ]"
 check "host list contains the incident host" "[ \"$HOST_PRESENT\" = true ]"
 check "host history combines events and incidents" \
   "[ \"$HOST_EVENTS\" = 5 ] && [ \"$HOST_INCIDENTS\" = 1 ]"
+# ---------------------------------------------------------------- scenario 14
+echo "== 14. expanded security telemetry and grounded Investigator =="
+T14=$(new_topic telemetry) || { echo "FAIL: create telemetry topic"; exit 1; }
+A14="linux-verify-$TS-telemetry"
+G14="logly-verify-$TS-telemetry"
+L14="$RUN_DIR/security.log"
+AUDIT14="$RUN_DIR/audit.log"
+cat > "$L14" <<'LOG'
+Nov 10 10:00:01 web-01 sudo: alice : TTY=pts/0 ; USER=root ; COMMAND=/bin/echo REDACT_THIS_ARGUMENT
+Nov 10 10:00:02 web-01 useradd[42]: new user: name=bob, UID=1001, home=/home/bob
+LOG
+cat > "$AUDIT14" <<'LOG'
+type=SYSCALL msg=audit(1762673744.123:42): success=yes exe="/usr/bin/id" key="logly-exec"
+type=EXECVE msg=audit(1762673744.123:42): argc=1 a0="REDACT_THIS_ARGUMENT"
+type=SYSCALL msg=audit(1762673745.123:43): success=no key=logly-passwd
+LOG
+start_consumer "$T14" "$G14" "$RUN_DIR/consumer-telemetry.log"
+C14=$LAST_PID
+start_agent "$T14" "$L14" "$RUN_DIR/telemetry.db" auth-log "$A14" "LOGLY_V2_AUDIT_PATH=$AUDIT14"
+AG14=$LAST_PID
+if wait_docs "$A14" 4 30; then
+  pass "all four security records were indexed"
+else
+  fail "all four security records were indexed"
+fi
+if wait_lag_zero "$G14" "$T14" 4 30; then
+  pass "all four security records were committed with no extra deliveries"
+else
+  fail "all four security records were committed with no extra deliveries"
+fi
+QUERY14=$(jq -nc --arg host "$A14" '{size:5,query:{term:{"agent.agent_id.keyword":$host}}}')
+if curl -fsS "$ES/ids-events/_search" -H 'Content-Type: application/json' -d "$QUERY14" |
+  jq -e 'select(.timed_out == false and ._shards.failed == 0) | [.hits.hits[]._source] as $events |
+    ($events | length) == 4 and
+    ([$events[].event.category] | sort) == ["account","file_integrity","process","sudo"] and
+    ([$events[] | select(.collection.source_type == "audit")] | length) == 2 and
+    all($events[]; (.raw_event.data | contains("REDACT_THIS_ARGUMENT") | not))' >/dev/null; then
+  pass "security documents preserve category and audit provenance with sanitized evidence"
+else
+  fail "security documents preserve category and audit provenance with sanitized evidence"
+fi
+if curl -fsS "http://127.0.0.1:$API_PORT/api/events?agent_id=$A14&category=process" |
+  jq -e '.total == 1 and .events[0].target.path == "/usr/bin/id" and (.events[0] | has("raw_event") | not)' >/dev/null; then
+  pass "FastAPI category filter exposes process metadata without raw evidence"
+else
+  fail "FastAPI category filter exposes process metadata without raw evidence"
+fi
+if curl -fsS "http://127.0.0.1:$API_PORT/api/incidents/$INC_ID/investigate" -H 'Content-Type: application/json' -d '{}' |
+  jq -e --argjson detail "$DETAIL" '
+    .reproduced == true and .mode == "deterministic" and (.observations | length) > 0 and
+    (([.observations[].event_ids[]] - [$detail.timeline[].event_id]) | length) == 0' >/dev/null; then
+  pass "Investigator reproduces the rule and cites only stored timeline events"
+else
+  fail "Investigator reproduces the rule and cites only stored timeline events"
+fi
+stop_pid "$AG14"
+stop_pid "$C14"
 stop_pid "$APIPID"
 
 echo

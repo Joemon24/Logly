@@ -148,7 +148,9 @@ os.makedirs("models", exist_ok=True)
 # LOAD TRAINING DATA
 # =========================================================
 
-if os.path.exists(TRAINING_DATA_PATH):
+legacy_ml_enabled = os.getenv("LOGLY_ENABLE_LEGACY_ML") == "1"
+
+if legacy_ml_enabled and os.path.exists(TRAINING_DATA_PATH):
 
     try:
 
@@ -172,7 +174,8 @@ if os.path.exists(TRAINING_DATA_PATH):
 # =========================================================
 
 if (
-    os.path.exists(MODEL_PATH)
+    legacy_ml_enabled
+    and os.path.exists(MODEL_PATH)
     and os.path.exists(SCALER_PATH)
 ):
 

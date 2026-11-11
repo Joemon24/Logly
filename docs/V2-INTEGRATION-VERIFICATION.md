@@ -44,7 +44,7 @@ fails. Logs are kept in the temporary directory on failure.
 | 2 | Duplicate Kafka delivery | Replaying the captured payload leaves the Elasticsearch document version and count unchanged; the consumer logs a duplicate skip. |
 | 3 | Kafka outage and recovery | The event stays pending with zero acknowledgements; after Kafka returns it is delivered. |
 | 4 | Consumer restart | Stop the consumer, append a record, restart the same group; the second event is processed without loss. |
-| 5 | Elasticsearch outage and recovery | The consumer fails without writing or committing; after Elasticsearch returns and the consumer restarts, the event is processed. |
+| 5 | Elasticsearch outage and recovery | The consumer fails during the outage and Kafka has no committed offset. After a successful Elasticsearch query confirms zero records, restarting the consumer stores exactly one record and commits offset 1 with zero lag. |
 | 6 | Outbox capacity reached | With capacity 1 and one record per poll, the first event stays durable under backpressure; both events arrive after recovery. |
 | 7 | Rotation and truncation | Rotation drains the old file and continues in the new one; truncation starts a new source generation; all four events arrive. |
 | 8 | Multiple source identities | Two sources produce two documents and two distinct Kafka keys. |
@@ -53,6 +53,7 @@ fails. Logs are kept in the temporary directory on failure.
 | 11 | Suspicious success | Three failures followed by a success produce one `suspicious_login_success` incident with three failures and one success event ID. |
 | 12 | Benign negative | Four failures, a clean success, and two failures followed by a success create no incident. |
 | 13 | Read API | Overview, event search, incident search, incident detail/timeline, host list, and host history return the stored evidence. |
+| 14 | Expanded telemetry and Investigator | Four fixture records commit with sanitized evidence and audit provenance. The category filter returns the expected executable metadata. Investigator reproduces the rule with retrieved event citations. |
 
 ## Incident checks
 

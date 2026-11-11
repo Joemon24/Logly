@@ -138,7 +138,7 @@ func stopRuntime(t *testing.T, cancel context.CancelFunc, done chan error) {
 }
 
 func TestRunCollectsDispatchesAndPersistsCheckpoint(t *testing.T) {
-	logPath := copyFixture(t, "auth.log")
+	logPath := copyFixture(t, "auth.txt")
 	dbPath := filepath.Join(t.TempDir(), "outbox.db")
 	cfg := testConfig(t, logPath, dbPath)
 
@@ -209,7 +209,7 @@ func TestRunCollectsDispatchesAndPersistsCheckpoint(t *testing.T) {
 }
 
 func TestRestartDeliversPendingEvents(t *testing.T) {
-	logPath := copyFixture(t, "auth.log")
+	logPath := copyFixture(t, "auth.txt")
 	dbPath := filepath.Join(t.TempDir(), "outbox.db")
 	cfg := testConfig(t, logPath, dbPath)
 

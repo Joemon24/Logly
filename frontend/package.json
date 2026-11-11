@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:lab": "tsc --noEmit && vite build --config vite.lab.config.ts",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --deny-warnings src vite.config.ts",
+    "lint": "oxlint --deny-warnings src vite.config.ts vite.lab.config.ts",
     "test": "vitest run",
     "preview": "vite preview"
   },
@@ -21,7 +22,7 @@
     "@types/react-dom": "19.2.4",
     "oxlint": "1.79.0",
     "typescript": "6.0.3",
-    "vite": "8.2.1",
-    "vitest": "4.1.11"
+    "vite": "8.3.8",
+    "vitest": "4.1.12"
   }
 }

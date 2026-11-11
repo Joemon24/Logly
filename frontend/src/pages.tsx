@@ -1,7 +1,8 @@
+import { Investigator } from './investigator'
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowUpRight, RefreshCw, Search } from './icons'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { ACTIVITY_LIMIT, activitySeries, listEndpoint, request, type EventPage, type Host, type HostHistory, type IncidentDetail, type IncidentPage, type Overview } from './api'
+import { ACTIVITY_LIMIT, MAX_PAGES, activitySeries, listEndpoint, request, type EventPage, type Host, type HostHistory, type IncidentDetail, type IncidentPage, type Overview } from './api'
 import { DataState, Empty, useResource } from './resource'
 import { EventTable, formatCount, formatDate, HostLink, HostList, IncidentTable, label, Pagination, Provenance, Severity, Table, TableDate } from './tables'
 import { incidentProvenance, isIntegrationTestHost } from './provenance'
@@ -100,6 +101,7 @@ export function OverviewPage() {
 
 type Filter = { name: string; label: string; options?: string[]; date?: boolean; example?: string }
 const eventFilters: Filter[] = [
+  { name: 'category', label: 'Category', options: ['authentication', 'sudo', 'account', 'process', 'file_integrity', 'heartbeat'] },
   { name: 'source_ip', label: 'Source IP', example: 'e.g. 192.0.2.10' }, { name: 'agent_id', label: 'Host', example: 'e.g. edge-01' },
   { name: 'username', label: 'Username', example: 'e.g. admin' }, { name: 'outcome', label: 'Outcome', options: ['failure', 'success', 'unknown'] },
   { name: 'since', label: 'Since (UTC)', date: true },
@@ -156,7 +158,7 @@ function Filters({ fields, params, apply, path }: { fields: Filter[]; params: UR
 export function RecordsPage({ kind }: { kind: 'events' | 'incidents' }) {
   const [params, setParams] = useSearchParams()
   const parsed = Number(params.get('page'))
-  const page = Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 400 ? parsed : 1
+  const page = Number.isSafeInteger(parsed) && parsed > 0 && parsed <= MAX_PAGES ? parsed : 1
   const fields = kind === 'events' ? eventFilters : incidentFilters
   const endpoint = listEndpoint('/' + kind as '/events' | '/incidents', params, fields.map(field => field.name), page)
   const load = useCallback((signal: AbortSignal) => request<EventPage | IncidentPage>(endpoint, signal), [endpoint])
@@ -198,15 +200,17 @@ export function IncidentPageView() {
         <div><dt>Incident reference</dt><dd translate="no">{incident.incident_id}</dd></div>
         <div><dt>Status</dt><dd>{label(incident.status)}</dd></div>
         <div><dt>Source IP</dt><dd translate="no">{incident.source_ip ?? '—'}</dd></div>
-        <div><dt>MITRE technique</dt><dd>{incident.mitre_technique ?? '—'}</dd></div>
+        <div><dt>MITRE technique</dt><dd>{incident.mitre_technique ?? incident.mitre ?? '—'}</dd></div>
         <div><dt>First seen (UTC)</dt><dd>{formatDate(incident.first_seen)}</dd></div>
         <div><dt>Last seen (UTC)</dt><dd>{formatDate(incident.last_seen)}</dd></div>
         <div><dt>Affected hosts</dt><dd><HostList hosts={incident.hosts} /></dd></div>
         <div><dt>Usernames</dt><dd translate="no">{incident.usernames?.length ? incident.usernames.join(', ') : '—'}</dd></div>
       </dl>
+      <Investigator key={incident.incident_id} incidentId={incident.incident_id} timelineIds={new Set(incident.timeline.flatMap(event => event.event_id ? [event.event_id] : []))} />
       <Section title="Evidence timeline" action={<span className="muted">{formatCount(incident.evidence_event_count)} retrieved</span>}>
         {incident.evidence && <div className="evidence-summary"><span>{formatCount(incident.evidence.failure_count)} failed logins</span><span>{formatCount(incident.evidence.success_count)} successful logins</span></div>}
-        <EventTable name="Incident evidence timeline" events={incident.timeline} />
+        {Boolean(incident.omitted_event_count) && <p className="lab-empty muted">{formatCount(incident.omitted_event_count ?? 0)} evidence references exceed the timeline display limit.</p>}
+        <EventTable name="Incident evidence timeline" events={incident.timeline} evidenceAnchors />
         {incident.missing_event_ids.length > 0 && <details className="missing-evidence"><summary>{formatCount(incident.missing_event_ids.length)} evidence references unavailable</summary><ul>{incident.missing_event_ids.map(id => <li key={id} translate="no">{id}</li>)}</ul></details>}
       </Section>
     </>}</DataState>

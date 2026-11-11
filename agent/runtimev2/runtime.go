@@ -21,6 +21,7 @@ type Runtime struct {
 	logger     *slog.Logger
 	store      *storage.Store
 	collector  *collector.Collector
+	audit      *collector.Collector
 	dispatcher *dispatcher.Dispatcher
 
 	closeOnce sync.Once
@@ -57,6 +58,14 @@ func New(cfg Config, logger *slog.Logger, producer dispatcher.Producer) (*Runtim
 		PollInterval:      cfg.pollInterval(),
 		MaxRecordsPerPoll: cfg.MaxRecordsPerPoll,
 		Host:              events.Host{Hostname: hostname},
+		ReportSource: func(path string, problem error) {
+			if problem == nil {
+				logger.Info("collection source readable again", "path", path)
+				return
+			}
+			logger.Warn("collection source unavailable", "path", path, "error", problem,
+				"hint", "check log configuration, permissions, and rotation")
+		},
 	}
 	col, err := collector.New(collectorCfg)
 	if err != nil {
@@ -64,6 +73,18 @@ func New(cfg Config, logger *slog.Logger, producer dispatcher.Producer) (*Runtim
 		return nil, fmt.Errorf("build collector: %w", err)
 	}
 
+	var audit *collector.Collector
+	if cfg.AuditPath != "" {
+		auditCfg := collectorCfg
+		auditCfg.Path = cfg.AuditPath
+		auditCfg.SourceID = "linux-audit"
+		auditCfg.Audit = true
+		audit, err = collector.New(auditCfg)
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("build audit collector: %w", err)
+		}
+	}
 	if producer == nil {
 		producer, err = dispatcher.NewKafkaProducer(dispatcher.KafkaConfig{
 			Brokers: cfg.KafkaBrokers,
@@ -92,6 +113,7 @@ func New(cfg Config, logger *slog.Logger, producer dispatcher.Producer) (*Runtim
 		logger:     logger,
 		store:      store,
 		collector:  col,
+		audit:      audit,
 		dispatcher: disp,
 	}, nil
 }
@@ -126,7 +148,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
-	failures := make(chan error, 2)
+	failures := make(chan error, 3)
 	run := func(name string, fn func(context.Context) error) {
 		defer wg.Done()
 		if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -139,6 +161,13 @@ func (r *Runtime) Run(ctx context.Context) error {
 	wg.Add(2)
 	go run("collector", r.collector.Run)
 	go run("dispatcher", r.dispatcher.Run)
+	if r.audit != nil {
+		wg.Add(1)
+		r.logger.Info("audit collection configured", "path", r.cfg.AuditPath)
+		go run("audit collector", r.audit.Run)
+	} else {
+		r.logger.Info("audit collection disabled", "hint", "set LOGLY_V2_AUDIT_PATH after configuring selected audit rules")
+	}
 
 	statsDone := make(chan struct{})
 	go r.logStats(ctx, statsDone)
@@ -194,6 +223,9 @@ func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		dispErr := r.dispatcher.Close()
 		colErr := r.collector.Close()
+		if r.audit != nil {
+			colErr = errors.Join(colErr, r.audit.Close())
+		}
 		storeErr := r.store.Close()
 		r.closeErr = errors.Join(dispErr, colErr, storeErr)
 	})
@@ -252,7 +284,7 @@ func describe(err error) (string, string) {
 			"a log record exceeds the raw evidence limit; the checkpoint stopped before it so no data is skipped"
 	case errors.Is(err, collector.ErrRejectedRecord):
 		return "rejected_record",
-			"a malformed sshd record stopped the checkpoint; fix or rotate the log, then restart"
+			"a malformed security record stopped the checkpoint; fix or rotate the log, then restart"
 	case errors.Is(err, collector.ErrCoverageGap):
 		return "coverage_gap",
 			"a previous source generation was rotated away before it was read; the gap is reported, not hidden"

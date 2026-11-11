@@ -1,0 +1,223 @@
+[
+  {
+    "id": "brute_force_positive",
+    "title": "SSH brute force",
+    "expected_rule": "ssh_brute_force",
+    "events": [
+      {
+        "id": "evt_fixture_brute_1",
+        "time": "2026-11-09T10:00:00Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "203.0.113.200"
+      },
+      {
+        "id": "evt_fixture_brute_2",
+        "time": "2026-11-09T10:00:30Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "203.0.113.200"
+      },
+      {
+        "id": "evt_fixture_brute_3",
+        "time": "2026-11-09T10:01:00Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "203.0.113.200"
+      },
+      {
+        "id": "evt_fixture_brute_4",
+        "time": "2026-11-09T10:01:30Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "203.0.113.200"
+      },
+      {
+        "id": "evt_fixture_brute_5",
+        "time": "2026-11-09T10:02:00Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "203.0.113.200"
+      }
+    ],
+    "findings": [
+      {
+        "rule": "ssh_brute_force",
+        "timestamp": "2026-11-09T10:02:00Z",
+        "event_ids": [
+          "evt_fixture_brute_1",
+          "evt_fixture_brute_2",
+          "evt_fixture_brute_3",
+          "evt_fixture_brute_4",
+          "evt_fixture_brute_5"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "password_spraying_positive",
+    "title": "SSH password spraying",
+    "expected_rule": "ssh_password_spraying",
+    "events": [
+      {
+        "id": "evt_fixture_spray_1",
+        "time": "2026-11-09T10:05:00Z",
+        "outcome": "failure",
+        "user": "alice",
+        "ip": "198.51.100.77"
+      },
+      {
+        "id": "evt_fixture_spray_2",
+        "time": "2026-11-09T10:05:01Z",
+        "outcome": "failure",
+        "user": "bob",
+        "ip": "198.51.100.77"
+      },
+      {
+        "id": "evt_fixture_spray_3",
+        "time": "2026-11-09T10:05:02Z",
+        "outcome": "failure",
+        "user": "carol",
+        "ip": "198.51.100.77"
+      },
+      {
+        "id": "evt_fixture_spray_4",
+        "time": "2026-11-09T10:05:03Z",
+        "outcome": "failure",
+        "user": "dave",
+        "ip": "198.51.100.77"
+      },
+      {
+        "id": "evt_fixture_spray_5",
+        "time": "2026-11-09T10:05:04Z",
+        "outcome": "failure",
+        "user": "erin",
+        "ip": "198.51.100.77"
+      }
+    ],
+    "findings": [
+      {
+        "rule": "ssh_password_spraying",
+        "timestamp": "2026-11-09T10:05:04Z",
+        "event_ids": [
+          "evt_fixture_spray_1",
+          "evt_fixture_spray_2",
+          "evt_fixture_spray_3",
+          "evt_fixture_spray_4",
+          "evt_fixture_spray_5"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "suspicious_success_positive",
+    "title": "Suspicious successful login",
+    "expected_rule": "suspicious_login_success",
+    "events": [
+      {
+        "id": "evt_fixture_success_1",
+        "time": "2026-11-09T10:10:00Z",
+        "outcome": "failure",
+        "user": "bob",
+        "ip": "192.0.2.88"
+      },
+      {
+        "id": "evt_fixture_success_2",
+        "time": "2026-11-09T10:10:30Z",
+        "outcome": "failure",
+        "user": "bob",
+        "ip": "192.0.2.88"
+      },
+      {
+        "id": "evt_fixture_success_3",
+        "time": "2026-11-09T10:11:00Z",
+        "outcome": "failure",
+        "user": "bob",
+        "ip": "192.0.2.88"
+      },
+      {
+        "id": "evt_fixture_success_4",
+        "time": "2026-11-09T10:12:00Z",
+        "outcome": "success",
+        "user": "bob",
+        "ip": "192.0.2.88"
+      }
+    ],
+    "findings": [
+      {
+        "rule": "suspicious_login_success",
+        "timestamp": "2026-11-09T10:12:00Z",
+        "event_ids": [
+          "evt_fixture_success_1",
+          "evt_fixture_success_2",
+          "evt_fixture_success_3",
+          "evt_fixture_success_4"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "benign_negative",
+    "title": "Benign authentication",
+    "expected_rule": null,
+    "events": [
+      {
+        "id": "evt_fixture_benign_1",
+        "time": "2026-11-09T10:20:00Z",
+        "outcome": "failure",
+        "user": "frank",
+        "ip": "203.0.113.90"
+      },
+      {
+        "id": "evt_fixture_benign_2",
+        "time": "2026-11-09T10:20:01Z",
+        "outcome": "failure",
+        "user": "frank",
+        "ip": "203.0.113.90"
+      },
+      {
+        "id": "evt_fixture_benign_3",
+        "time": "2026-11-09T10:20:02Z",
+        "outcome": "failure",
+        "user": "frank",
+        "ip": "203.0.113.90"
+      },
+      {
+        "id": "evt_fixture_benign_4",
+        "time": "2026-11-09T10:20:03Z",
+        "outcome": "failure",
+        "user": "frank",
+        "ip": "203.0.113.90"
+      },
+      {
+        "id": "evt_fixture_benign_5",
+        "time": "2026-11-09T10:21:00Z",
+        "outcome": "success",
+        "user": "grace",
+        "ip": "203.0.113.50"
+      },
+      {
+        "id": "evt_fixture_benign_6",
+        "time": "2026-11-09T10:22:00Z",
+        "outcome": "failure",
+        "user": "heidi",
+        "ip": "203.0.113.60"
+      },
+      {
+        "id": "evt_fixture_benign_7",
+        "time": "2026-11-09T10:22:30Z",
+        "outcome": "failure",
+        "user": "heidi",
+        "ip": "203.0.113.60"
+      },
+      {
+        "id": "evt_fixture_benign_8",
+        "time": "2026-11-09T10:23:00Z",
+        "outcome": "success",
+        "user": "heidi",
+        "ip": "203.0.113.60"
+      }
+    ],
+    "findings": []
+  }
+]

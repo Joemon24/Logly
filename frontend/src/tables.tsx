@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, ChevronLeft, ChevronRight } from './icons'
 import type { ReactNode } from 'react'
-import { eventDate, PAGE_SIZE, type Incident, type LogEvent } from './api'
+import { eventDate, MAX_PAGES, PAGE_SIZE, type Incident, type LogEvent } from './api'
 import { Empty } from './resource'
 import { incidentProvenance, isIntegrationTestHost } from './provenance'
 
@@ -105,23 +105,25 @@ const eventColumns: Column[] = [
   { label: 'Severity', className: 'col-severity' },
 ]
 
-export function EventTable({ events, name = 'Events' }: { events: LogEvent[]; name?: string }) {
+export function EventTable({ events, name = 'Events', evidenceAnchors = false }: { events: LogEvent[]; name?: string; evidenceAnchors?: boolean }) {
   if (!events.length) return <Empty title="No events found" detail="Change the filters or check whether your agents are sending events." />
   return <Table name={name} headers={eventColumns} className="event-table">
-    {events.map((event, i) => <tr key={event.event_id ?? event.storage_id ?? i}>
+    {events.map((event, i) => <tr key={event.event_id ?? event.storage_id ?? i} id={evidenceAnchors && event.event_id ? 'evidence-' + event.event_id : undefined} tabIndex={evidenceAnchors ? -1 : undefined}>
       <td><TableDate value={eventDate(event)} /></td>
       <th scope="row"><details className="event-record">
         <summary>{label(event.event?.action ?? event.event?.category ?? event.alert_type)}</summary>
         <dl>
           <dt>Event reference</dt><dd translate="no">{event.event_id ?? event.storage_id ?? '—'}</dd>
           <dt>Collection source</dt><dd translate="no">{event.collection?.path ?? event.collection?.source_id ?? '—'}</dd>
+          {event.target?.path && <><dt>Target path</dt><dd translate="no">{event.target.path}</dd></>}
+          {event.source?.entity_type === 'user' && event.target?.name && <><dt>Target user</dt><dd translate="no">{event.target.name}</dd></>}
           <dt>Record number</dt><dd>{event.collection?.position?.record_number ?? '—'}</dd>
           <dt>MITRE technique</dt><dd>{event.mitre_technique ?? '—'}</dd>
         </dl>
       </details></th>
       <td>{event.agent?.agent_id ? <HostLink host={event.agent.agent_id} /> : '—'}</td>
       <td translate="no">{event.source?.ip ?? event.src_ip ?? '—'}</td>
-      <td translate="no">{event.target?.name ?? event.username ?? '—'}</td>
+      <td translate="no">{event.source?.name ?? event.target?.name ?? event.username ?? '—'}</td>
       <td>{label(event.event?.outcome ?? event.outcome)}</td>
       <td><Severity value={event.severity} /></td>
     </tr>)}
@@ -134,7 +136,7 @@ export function Pagination({ total, shown, page, url }: { total: number; shown: 
     <span role="status">{shown ? `${formatCount(first)}–${formatCount(first + shown - 1)} of ${formatCount(total)}` : `0 shown · ${formatCount(total)} matching`}</span>
     <nav aria-label="Pagination">
       {page > 1 && <Link className="button" to={url(page - 1)}><ChevronLeft size={15} aria-hidden="true" /> Previous</Link>}
-      {first + shown <= total && shown > 0 && <Link className="button" to={url(page + 1)}>Next <ChevronRight size={15} aria-hidden="true" /></Link>}
+      {first + shown <= total && shown > 0 && page < MAX_PAGES && <Link className="button" to={url(page + 1)}>Next <ChevronRight size={15} aria-hidden="true" /></Link>}
     </nav>
   </div>
 }

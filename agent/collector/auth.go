@@ -22,10 +22,15 @@ var (
 )
 
 type authRecord struct {
-	Action  string
-	Outcome string
-	User    string
-	IP      string
+	Category  events.Category
+	Actor     string
+	Evidence  string
+	Target    *events.Entity
+	Timestamp time.Time
+	Action    string
+	Outcome   string
+	User      string
+	IP        string
 }
 
 // parseAuthLine extracts an SSH authentication record. relevant is true for
@@ -110,6 +115,19 @@ func parseAuthTimestamp(line string, now time.Time) (time.Time, bool) {
 func (c *Collector) buildEvent(record authRecord, raw string, offset int64, recordNumber uint64) (events.Event, error) {
 	now := c.now().UTC()
 	timestamp, fromLog := parseAuthTimestamp(raw, now)
+	if !record.Timestamp.IsZero() {
+		timestamp, fromLog = record.Timestamp, true
+	}
+	category := record.Category
+	evidence := record.Evidence
+	if category == "" {
+		category = events.CategoryAuthentication
+		evidence = raw
+	}
+	format := events.RawFormatText
+	if c.sourceType == events.SourceTypeAudit {
+		format = events.RawFormatAudit
+	}
 	timestampSource := events.TimestampSourceIngest
 	if fromLog {
 		timestampSource = events.TimestampSourceLog
@@ -132,17 +150,17 @@ func (c *Collector) buildEvent(record authRecord, raw string, offset int64, reco
 		},
 		Host: c.host,
 		Event: events.EventMeta{
-			Category: events.CategoryAuthentication,
+			Category: category,
 			Action:   record.Action,
 			Outcome:  record.Outcome,
 		},
 		Raw: events.Raw{
-			Format: events.RawFormatText,
-			Data:   raw,
+			Format: format,
+			Data:   evidence,
 		},
 		Collection: events.Collection{
 			SourceID:   c.sourceID,
-			SourceType: events.SourceTypeFile,
+			SourceType: c.sourceType,
 			Path:       c.path,
 			Generation: c.generation,
 			Position: events.Position{
@@ -151,6 +169,10 @@ func (c *Collector) buildEvent(record authRecord, raw string, offset int64, reco
 			},
 		},
 	}
+	if record.Actor != "" {
+		event.Source = &events.Entity{Type: events.EntityUser, Name: record.Actor}
+	}
+	event.Target = record.Target
 	if record.IP != "" {
 		event.Source = &events.Entity{Type: events.EntityIP, IP: record.IP}
 	}

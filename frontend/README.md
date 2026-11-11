@@ -36,3 +36,7 @@ npm run build
 In a browser, use the event filters, open an incident timeline, and follow its
 host link. Repeat at a narrow viewport and use Tab to reach the navigation,
 filters, table scroll regions, and event disclosures.
+
+## Completion features
+
+Incident Details now includes Investigator. Its citations link to the corresponding evidence rows. Use `npm run build:lab` for the standalone synthetic Simulation Lab in `dist-lab/lab.html`. See the [completion guide](../docs/V2-COMPLETION.md) for data provenance, API behavior and deployment boundaries.

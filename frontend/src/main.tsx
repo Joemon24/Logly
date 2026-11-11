@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { Activity, LayoutGrid, ScanLine, Server, ShieldAlert } from './icons'
 import { HostHistoryPage, HostsPage, IncidentPageView, OverviewPage, RecordsPage } from './pages'
+import { SimulationLab } from './lab'
 import './styles.css'
 
 const navigation = [
@@ -10,6 +11,7 @@ const navigation = [
   { to: '/events', title: 'Events', icon: Activity },
   { to: '/incidents', title: 'Incidents', icon: ShieldAlert },
   { to: '/hosts', title: 'Hosts', icon: Server },
+  { to: '/lab', title: 'Simulation Lab', icon: ScanLine },
 ]
 
 function Dashboard() {
@@ -49,6 +51,7 @@ function Dashboard() {
           <Route path="/incidents" element={<RecordsPage kind="incidents" />} />
           <Route path="/incidents/:incidentId" element={<IncidentPageView />} />
           <Route path="/hosts" element={<HostsPage />} />
+          <Route path="/lab" element={<SimulationLab />} />
           <Route path="/hosts/:host" element={<HostHistoryPage />} />
           <Route path="*" element={<div className="state-panel"><div><h1>Page not found</h1><p>Open the overview to continue investigating.</p></div><Link className="button" to="/">Open overview</Link></div>} />
         </Routes>

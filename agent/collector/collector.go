@@ -1,18 +1,6 @@
-// Package collector implements a durable, checkpointed collector for Linux
-// authentication logs.
-//
-// It reads newline-delimited file records, parses SSH authentication records
-// into schema-v2 events, and persists each event together with its source
-// checkpoint through storage.Store.Append. Records that are deliberately
-// ignored advance the checkpoint through storage.Store.AdvanceCheckpoint
-// without producing an event. Checkpoints are owned by storage: the collector
-// never advances an in-memory position before the durable write succeeds.
-//
-// Record numbers count physical complete input records, including ignored
-// lines. Only parsed SSH authentication records become events.
-//
-// Phase 3 scope: collection and persistence only. Kafka dispatch is a separate
-// component.
+// Package collector persists Linux security records and file checkpoints
+// atomically in a durable outbox. Physical record numbers include ignored
+// lines. Each collector instance follows one configured source.
 package collector
 
 import (
@@ -114,6 +102,9 @@ type Config struct {
 	// Path is the log file to tail. Empty selects DefaultPath.
 	Path string
 
+	// Audit selects keyed Linux audit records instead of auth log messages.
+	Audit bool
+
 	// SourceID is the stable logical source identity. Defaults to "auth-log".
 	SourceID string
 
@@ -127,6 +118,9 @@ type Config struct {
 	// Host is attached to every event. Hostname defaults to os.Hostname().
 	Host events.Host
 
+	// ReportSource reports state transitions for a missing/unreadable source.
+	ReportSource func(path string, problem error)
+
 	// Now supplies ingest timestamps and syslog year inference. Defaults to
 	// time.Now. It exists for deterministic tests.
 	Now func() time.Time
@@ -135,13 +129,15 @@ type Config struct {
 // Collector tails one authentication log file. It is not safe for concurrent
 // use; drive it from a single goroutine with Poll or Run.
 type Collector struct {
-	store      Store
-	path       string
-	sourceID   string
-	pollPeriod time.Duration
-	maxRecords int
-	host       events.Host
-	now        func() time.Time
+	store        Store
+	path         string
+	sourceID     string
+	sourceType   events.SourceType
+	pollPeriod   time.Duration
+	maxRecords   int
+	host         events.Host
+	now          func() time.Time
+	reportSource func(string, error)
 
 	stateLoaded bool
 	active      storage.SourceGeneration
@@ -185,6 +181,10 @@ func New(cfg Config) (*Collector, error) {
 	if sourceID == "" {
 		sourceID = DefaultSourceID
 	}
+	sourceType := events.SourceTypeFile
+	if cfg.Audit {
+		sourceType = events.SourceTypeAudit
+	}
 	pollPeriod := cfg.PollInterval
 	if pollPeriod <= 0 {
 		pollPeriod = DefaultPollInterval
@@ -206,13 +206,15 @@ func New(cfg Config) (*Collector, error) {
 	}
 
 	return &Collector{
-		store:      cfg.Store,
-		path:       path,
-		sourceID:   sourceID,
-		pollPeriod: pollPeriod,
-		maxRecords: maxRecords,
-		host:       host,
-		now:        now,
+		store:        cfg.Store,
+		path:         path,
+		sourceID:     sourceID,
+		sourceType:   sourceType,
+		pollPeriod:   pollPeriod,
+		maxRecords:   maxRecords,
+		host:         host,
+		now:          now,
+		reportSource: cfg.ReportSource,
 	}, nil
 }
 
@@ -275,12 +277,30 @@ func (c *Collector) Poll(ctx context.Context) (int, error) {
 // so they stay observable. A missing file is treated as no work and retried
 // until it appears.
 func (c *Collector) Run(ctx context.Context) error {
+	var lastIssue string
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := c.Poll(ctx); err != nil && !retryable(err) {
+		_, err := c.Poll(ctx)
+		if err != nil && !retryable(err) {
 			return err
+		}
+		if c.reportSource != nil {
+			var sourceIssue error
+			if errors.Is(err, ErrSourceIO) {
+				sourceIssue = err
+			} else if c.file == nil {
+				sourceIssue = fs.ErrNotExist
+			}
+			issue := ""
+			if sourceIssue != nil {
+				issue = sourceIssue.Error()
+			}
+			if issue != lastIssue {
+				c.reportSource(c.path, sourceIssue)
+				lastIssue = issue
+			}
 		}
 
 		timer := time.NewTimer(c.pollPeriod)
@@ -493,7 +513,7 @@ func (c *Collector) transition(ctx context.Context, next string) (storage.Source
 		expected = c.active.Generation
 	}
 	generation, err := c.store.TransitionSourceGeneration(
-		ctx, c.sourceID, events.SourceTypeFile, expected, next)
+		ctx, c.sourceID, c.sourceType, expected, next)
 	if err != nil {
 		return storage.SourceGeneration{}, fmt.Errorf("%w: %w", ErrStorage, err)
 	}

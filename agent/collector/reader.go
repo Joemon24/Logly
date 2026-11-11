@@ -96,7 +96,11 @@ func (c *Collector) readFrom(ctx context.Context, size int64, final bool) error 
 
 		recordNumber := c.record + 1
 		text := string(data)
-		record, relevant, parseErr := parseAuthLine(text)
+		parse := parseSecurityLine
+		if c.sourceType == events.SourceTypeAudit {
+			parse = parseAuditLine
+		}
+		record, relevant, parseErr := parse(text)
 		if !relevant {
 			// Recognized as unrelated: advance the durable checkpoint so a
 			// restart does not rescan it, but do not insert an outbox event.
@@ -105,7 +109,7 @@ func (c *Collector) readFrom(ctx context.Context, size int64, final bool) error 
 				RecordNumber: recordNumber,
 			}
 			if err := c.store.AdvanceCheckpoint(
-				ctx, c.sourceID, events.SourceTypeFile, c.generation, position); err != nil {
+				ctx, c.sourceID, c.sourceType, c.generation, position); err != nil {
 				return persistError(err)
 			}
 			c.record = recordNumber

@@ -46,6 +46,8 @@ type Config struct {
 	LogPath string
 	// SourceID is the stable logical identity for LogPath.
 	SourceID string
+	// AuditPath enables the optional keyed audit log collector.
+	AuditPath string
 
 	// DBPath is the SQLite outbox database.
 	DBPath string
@@ -80,6 +82,7 @@ type Config struct {
 // documented default.
 func LoadConfig() (Config, error) {
 	cfg := Config{
+		AuditPath:    strings.TrimSpace(os.Getenv("LOGLY_V2_AUDIT_PATH")),
 		LogPath:      env("LOGLY_V2_LOG_PATH", collector.DefaultPath),
 		SourceID:     env("LOGLY_V2_SOURCE_ID", collector.DefaultSourceID),
 		DBPath:       os.Getenv("LOGLY_V2_DB_PATH"),
@@ -149,6 +152,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.SourceID) == "" {
 		return fmt.Errorf("%w: LOGLY_V2_SOURCE_ID is required", ErrInvalidConfig)
+	}
+	if c.AuditPath != "" && (c.SourceID == "linux-audit" || c.LogPath == c.AuditPath) {
+		return fmt.Errorf("%w: audit needs a distinct path and reserves source ID linux-audit", ErrInvalidConfig)
 	}
 	if len(c.KafkaBrokers) == 0 {
 		return fmt.Errorf("%w: LOGLY_V2_KAFKA_BROKERS must list at least one host:port", ErrInvalidConfig)

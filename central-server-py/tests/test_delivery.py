@@ -361,25 +361,16 @@ class DeliveryTests(unittest.TestCase):
                 key: doc for key, doc in client.store.items() if key[0] == 'ids-events'
             }
             self.assertEqual(len(indexed), 6)
-            triggered_ids = {
-                doc['event_id'] for doc in indexed.values() if doc['soar_triggered']
-            }
-            self.assertTrue(triggered_ids)
-            legacy_keys = {
-                (index, event_id)
-                for index in ('ids-alerts', 'ids-incidents')
-                for event_id in triggered_ids
-            }
-            self.assertEqual(block_ip.call_count, len(triggered_ids))
-            self.assertEqual(notify.call_count, len(triggered_ids))
+            self.assertTrue(all(doc['soar_triggered'] is False for doc in indexed.values()))
+            block_ip.assert_not_called()
+            notify.assert_not_called()
 
             incidents = {
                 key: doc for key, doc in client.store.items() if key[0] == 'ids-incidents-v2'
             }
             self.assertEqual([doc['attack_type'] for doc in incidents.values()], ['ssh_brute_force'])
             brute_key, brute = next(iter(incidents.items()))
-            self.assertEqual(set(client.store), set(indexed) | legacy_keys | {brute_key})
-            legacy_docs = {key: client.store[key] for key in legacy_keys}
+            self.assertEqual(set(client.store), set(indexed) | {brute_key})
             block_ip.reset_mock()
             notify.reset_mock()
 
@@ -397,7 +388,6 @@ class DeliveryTests(unittest.TestCase):
             call[0] in {'create', 'index'} and call[1] in {'ids-alerts', 'ids-incidents'}
             for call in replay_calls
         ))
-        self.assertEqual({key: replay_client.store[key] for key in legacy_keys}, legacy_docs)
         self.assertEqual(
             {key: doc for key, doc in replay_client.store.items() if key[0] == 'ids-events'},
             indexed,

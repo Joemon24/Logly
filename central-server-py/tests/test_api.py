@@ -90,6 +90,16 @@ class OverviewTests(unittest.TestCase):
 
 
 class EventApiTests(unittest.TestCase):
+    def test_rejects_incomplete_search_and_excessive_result_window(self):
+        client = FakeElasticsearch(search_responses=[{"timed_out": True}])
+        with self.assertRaises(HTTPException) as timeout:
+            list_events(client=client)
+        self.assertEqual(timeout.exception.status_code, 503)
+        self.assertFalse(client.search_calls[0]["allow_partial_search_results"])
+        with self.assertRaises(HTTPException) as window:
+            list_events(limit=50, offset=9999, client=client)
+        self.assertEqual(window.exception.status_code, 422)
+
     def test_events_are_filtered_and_summarised(self):
         client = FakeElasticsearch(search_responses=[{
             'hits': {
@@ -109,7 +119,7 @@ class EventApiTests(unittest.TestCase):
         result = list_events(
             limit=10, offset=5, agent_id='web-01',
             source_ip='203.0.113.9', outcome='failure',
-            since='2026-11-09T00:00:00Z', client=client,
+            since='2026-11-09T00:00:00Z', client=client, category='sudo',
         )
 
         self.assertEqual(result['total'], 1)
@@ -123,6 +133,7 @@ class EventApiTests(unittest.TestCase):
         self.assertEqual(call['index'], 'ids-events')
         self.assertEqual(call['from_'], 5)
         self.assertEqual(call['size'], 10)
+        self.assertIn({'term': {'event.category.keyword': 'sudo'}}, call['query']['bool']['filter'])
         filters = call['query']['bool']['filter']
         self.assertIn({'term': {'agent.agent_id.keyword': 'web-01'}}, filters)
         self.assertIn({'term': {'src_ip.keyword': '203.0.113.9'}}, filters)
@@ -193,6 +204,17 @@ class IncidentApiTests(unittest.TestCase):
         self.assertEqual(result['evidence_event_count'], 1)
         self.assertEqual(result['missing_event_ids'], ['evt_2'])
         self.assertEqual(client.search_calls[0]['query'], {'ids': {'values': ['evt_1', 'evt_2']}})
+
+    def test_timeline_distinguishes_omitted_references_from_missing(self):
+        refs = [f"event-{i}" for i in range(502)]
+        client = FakeElasticsearch(
+            get_response={"_source": {"event_ids": refs}},
+            search_responses=[{"hits": {"hits": []}}],
+        )
+        result = get_incident("inc_1", client=client)
+        self.assertEqual(result["omitted_event_count"], 2)
+        self.assertEqual(set(result["missing_event_ids"]), set(refs[:500]))
+        self.assertEqual(client.search_calls[0]["size"], 500)
 
     def test_missing_incident_returns_404(self):
         with self.assertRaises(HTTPException) as raised:
