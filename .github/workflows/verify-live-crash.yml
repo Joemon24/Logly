@@ -1,0 +1,32 @@
+name: Live consumer crash and replay
+on:
+  push:
+    branches: [verify/live-consumer-crash]
+permissions:
+  contents: read
+jobs:
+  crash-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r central-server-py/requirements.txt
+      - run: docker compose -f scripts/live-crash-check/compose.yml up -d
+      - name: Verify live crash and replay
+        run: python scripts/live-crash-check/verify.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}/central-server-py
+          LOGLY_TEST_ROOT: ${{ github.workspace }}
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          for log in scripts/live-crash-check/consumer-*.log; do
+            if [ -f "$log" ]; then tail -100 "$log"; fi
+          done
+          docker compose -f scripts/live-crash-check/compose.yml logs --tail 50
+      - name: Remove isolated test containers
+        if: always()
+        run: docker compose -f scripts/live-crash-check/compose.yml down
