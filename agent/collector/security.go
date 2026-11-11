@@ -22,6 +22,12 @@ var (
 )
 
 func parseSecurityLine(line string) (authRecord, bool, error) {
+	if sshPrefix.MatchString(line) {
+		return parseAuthLine(line)
+	}
+	if record, relevant, err := parseAuthLine(line); relevant {
+		return record, true, err
+	}
 	if match := sudoLine.FindStringSubmatch(line); match != nil {
 		body := match[2]
 		metadata, _, hasCommand := strings.Cut(body, " ; COMMAND=")
@@ -62,7 +68,7 @@ func parseSecurityLine(line string) (authRecord, bool, error) {
 		return authRecord{Category: events.CategoryAccount, Action: action, Outcome: "success",
 			User: target[1], Evidence: command + ": " + action}, true, nil
 	}
-	return parseAuthLine(line)
+	return authRecord{}, false, nil
 }
 
 func parseAuditLine(line string) (authRecord, bool, error) {

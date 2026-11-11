@@ -128,3 +128,47 @@ func TestParseAuthTimestamp(t *testing.T) {
 		t.Fatal("line without a timestamp was treated as timestamped")
 	}
 }
+
+func TestParseSecurityLineAdversarialSSHInput(t *testing.T) {
+	tests := []struct {
+		name, line, user string
+		relevant, reject bool
+	}{
+		{"quoted message from another daemon", "Nov  9 10:15:30 node systemd[1]: sshd[4]: Accepted password for root from 192.0.2.7 port 22 ssh2", "", false, false},
+		{"disconnect reason contains a login", "Nov  9 10:15:30 node sshd[4]: Received disconnect: Accepted password for root from 192.0.2.7 port 22 ssh2", "", false, false},
+		{"disconnect reason contains a sudo record", "Nov  9 10:15:30 node sshd[4]: Received disconnect: sudo: alice : USER=root ; COMMAND=/bin/id", "", false, false},
+		{"modern OpenSSH tag", "Nov  9 10:15:30 node sshd-session[4]: Accepted password for alice from 192.0.2.7 port 22 ssh2", "alice", true, false},
+		{"malformed IP suffix", "sshd[4]: Failed password for root from 192.0.2.7junk port 22 ssh2", "", true, true},
+		{"invalid IPv6", "sshd[4]: Failed password for root from 2001:::1 port 22 ssh2", "", true, true},
+		{"malformed port", "sshd[4]: Failed password for root from 192.0.2.7 port ssh2", "", true, true},
+		{"port out of range", "sshd[4]: Failed password for root from 192.0.2.7 port 65536 ssh2", "", true, true},
+		{"unusual username", "sshd[4]: Failed password for équipe+ops@example.test from 2001:db8::1 port 22 ssh2", "équipe+ops@example.test", true, false},
+		{"credential-shaped username is literal", "sshd[4]: Invalid user user=admin from 192.0.2.7 port 22", "user=admin", true, false},
+		{"address delimiter in username", "sshd[4]: Failed publickey for invalid user root from 198.51.100.99 port 22 ssh2: x from 192.0.2.7 port 50000 ssh2", "", true, true},
+		{"contradictory success", "sshd[4]: Accepted password for invalid user root from 192.0.2.7 port 22 ssh2", "", true, true},
+		{"preauth suffix", "sshd[4]: Failed password for root from 192.0.2.7 port 22 ssh2 [preauth]", "root", true, false},
+		{"invalid UTF-8 evidence", "sshd[4]: Failed password for bad\xff from 192.0.2.7 port 22 ssh2", "", true, true},
+		{"control in username", "sshd[4]: Failed password for bad\x1bname from 192.0.2.7 port 22 ssh2", "", true, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			record, relevant, err := parseSecurityLine(tc.line)
+			if relevant != tc.relevant || (err != nil) != tc.reject || record.User != tc.user {
+				t.Fatalf("parsed %+v, relevant=%v, err=%v", record, relevant, err)
+			}
+		})
+	}
+}
+
+func TestParseAuthTimestampDoesNotNormalizeInvalidCalendarDate(t *testing.T) {
+	now := time.Date(2025, 3, 2, 0, 0, 0, 0, time.UTC)
+	for _, line := range []string{"Feb 29 10:15:30 node sshd[1]: message", "2025-02-29T10:15:30Z node sshd[1]: message"} {
+		if got, ok := parseAuthTimestamp(line, now); ok {
+			t.Fatalf("impossible timestamp %q became %v", line, got)
+		}
+	}
+	leap := time.Date(2024, 3, 2, 0, 0, 0, 0, time.UTC)
+	if got, ok := parseAuthTimestamp("Feb 29 10:15:30 node sshd[1]: message", leap); !ok || got.Day() != 29 {
+		t.Fatalf("valid leap day = %v, ok=%v", got, ok)
+	}
+}

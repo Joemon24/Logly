@@ -505,9 +505,8 @@ def reject(message, reason, payload, position=0):
 def claim_v2_event(client, event, now):
     """Atomically claim a v2 event before any detection work.
 
-    Returns "claimed", "takeover", or "duplicate". A duplicate has already been
-    fully written, so features are not recomputed; its incident analysis is
-    still safe to repeat because incident IDs and evidence are idempotent.
+    Return the stored event for a duplicate, or the Elasticsearch version
+    required to complete our claim without overwriting a newer writer.
     """
     identifier = event["event_id"]
     claim = {
@@ -518,17 +517,16 @@ def claim_v2_event(client, event, now):
         "claimed_at": now.isoformat(),
     }
     try:
-        client.create(index=ES_INDEX, id=identifier, document=claim)
-        return "claimed"
+        version = client.create(index=ES_INDEX, id=identifier, document=claim)
     except ConflictError:
         document = client.get(index=ES_INDEX, id=identifier)
         source = document.get("_source", {})
         if source.get("processed") is True:
-            return "duplicate"
+            return source, {}
         # Documents written before claims existed have no processed flag but do
         # have the canonical storage_id. Treat them as complete, not as claims.
         if "processed" not in source and source.get("storage_id") == identifier:
-            return "duplicate"
+            return source, {}
         try:
             claimed_at = datetime.fromisoformat(source.get("claimed_at"))
         except (TypeError, ValueError):
@@ -539,8 +537,14 @@ def claim_v2_event(client, event, now):
             raise EventInFlight(
                 f"event {identifier} is claimed by another consumer"
             )
-        client.index(index=ES_INDEX, id=identifier, document=claim)
-        return "takeover"
+        version = client.index(
+            index=ES_INDEX, id=identifier, document=claim,
+            if_seq_no=document["_seq_no"], if_primary_term=document["_primary_term"],
+        )
+    return None, {
+        "if_seq_no": version["_seq_no"],
+        "if_primary_term": version["_primary_term"],
+    }
 
 
 def flush_and_commit(message, analysis_events=()):
@@ -549,7 +553,9 @@ def flush_and_commit(message, analysis_events=()):
         helpers.bulk(es, bulk_buffer)
         bulk_buffer.clear()
     if analysis_events:
-        es.indices.refresh(index=ES_INDEX)
+        refresh = es.indices.refresh(index=ES_INDEX)
+        if refresh["_shards"]["failed"]:
+            raise RuntimeError("incomplete Elasticsearch event refresh")
         for event in analysis_events:
             analyze_incident(es, event)
     consumer.commit({
@@ -588,6 +594,7 @@ try:
             payload = [payload]
 
         analysis_events = []
+        seen_v2_ids = set()
 
         for event_position, event in enumerate(payload):
 
@@ -603,6 +610,7 @@ try:
                     continue
 
                 now = datetime.now(timezone.utc)
+                write_guard = {}
 
                 if is_v2_event(event):
                     try:
@@ -611,16 +619,19 @@ try:
                         reject(msg, f"schema v2 validation failed: {error}", event, event_position)
                         continue
 
-                    # Claim the stable event_id atomically before feature work.
-                    # A duplicate is already stored, so its features are skipped;
-                    # incident analysis remains idempotent and is retried.
-                    event["storage_id"] = event["event_id"]
-                    event["processed"] = True
-                    if claim_v2_event(es, event, now) == "duplicate":
-                        print(f"↩️  Duplicate event skipped: {event['storage_id']}")
-                        if is_authentication_event(event):
-                            analysis_events.append(event)
+                    event_id = event["event_id"]
+                    if event_id in seen_v2_ids:
                         continue
+                    seen_v2_ids.add(event_id)
+
+                    stored, write_guard = claim_v2_event(es, event, now)
+                    if stored is not None:
+                        print(f"↩️  Duplicate event skipped: {event_id}")
+                        if is_authentication_event(stored):
+                            analysis_events.append(stored)
+                        continue
+                    event["storage_id"] = event_id
+                    event["processed"] = True
                 else:
                     event["storage_id"] = f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}"
 
@@ -637,7 +648,10 @@ try:
                     metadata.get("category") not in (None, "auth", "authentication")
                 ):
                     event["@timestamp"] = now.isoformat()
-                    bulk_buffer.append({"_index": ES_INDEX, "_id": event["storage_id"], "_source": event})
+                    bulk_buffer.append({
+                        "_index": ES_INDEX, "_id": event["storage_id"],
+                        "_source": event, **write_guard,
+                    })
                     continue
 
                 if event.get("schema_version") == 2 and is_authentication_event(event):
@@ -1005,7 +1019,8 @@ try:
                     "_index": ES_INDEX,
                     "_id": event["storage_id"],
 
-                    "_source": event
+                    "_source": event,
+                    **write_guard,
                 })
 
             except Exception:
