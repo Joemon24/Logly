@@ -493,45 +493,37 @@ func TestOutboxCapacityBackpressureAndRetry(t *testing.T) {
 	}
 }
 
-func TestMalformedSSHRecordStopsWithoutAdvancing(t *testing.T) {
+func TestMalformedSSHRecordPersistsEvidenceAndResumesAfterRestart(t *testing.T) {
 	store := newTestStore(t, 0)
 	path := filepath.Join(t.TempDir(), "auth.log")
-	writeLog(t, path, failedIPv4)
+	malformed := "Nov  9 10:16:00 web-01 sshd[200]: Failed password for invalid user bad\xff from not-an-ip port 22 ssh2\n"
+	writeLog(t, path, irrelevantLines(1)+malformed+acceptedV6)
 	collector := newTestCollector(t, store, path)
 
-	if count, err := poll(t, collector); err != nil || count != 1 {
-		t.Fatalf("initial poll = %d, %v", count, err)
+	if count, err := poll(t, collector); count != 2 || err != nil {
+		t.Fatalf("poll = %d, %v; want two persisted events", count, err)
 	}
-	before := pendingEvents(t, store)[0]
-	checkpoint, found, err := store.Checkpoint(context.Background(), "auth-log", before.Collection.Generation)
-	if err != nil || !found {
-		t.Fatalf("checkpoint: found=%v err=%v", found, err)
+	rows := pendingEvents(t, store)
+	unparsed := rows[0]
+	if unparsed.Event.Action != "ssh_unparsed" || unparsed.Event.Outcome != "unknown" ||
+		unparsed.Source != nil || unparsed.Target != nil ||
+		unparsed.Raw.Data != strings.ReplaceAll(malformed, "\xff", "?") ||
+		unparsed.Collection.Position.RecordNumber != 2 {
+		t.Fatalf("unexpected unparsed evidence: %+v", unparsed)
 	}
-
-	malformed := "Nov  9 10:16:00 web-01 sshd[200]: Failed password for from not-an-ip port ssh2\n"
-	appendLog(t, path, malformed+acceptedV6)
-	count, err := poll(t, collector)
-	if count != 0 || !errors.Is(err, ErrRejectedRecord) {
-		t.Fatalf("malformed poll = %d, %v; want 0, ErrRejectedRecord", count, err)
+	if rows[1].Event.Outcome != "success" || rows[1].Collection.Position.RecordNumber != 3 {
+		t.Fatalf("collection did not reach the next login: %+v", rows[1])
 	}
-	var rejection *RejectedRecordError
-	if !errors.As(err, &rejection) {
-		t.Fatalf("error type = %T, want *RejectedRecordError", err)
+	if err := collector.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if rejection.ByteOffset != int64(len(failedIPv4)) {
-		t.Fatalf("rejection offset = %d, want %d", rejection.ByteOffset, len(failedIPv4))
+	restarted := newTestCollector(t, store, path)
+	defer restarted.Close()
+	if count, err := poll(t, restarted); count != 0 || err != nil {
+		t.Fatalf("restart poll = %d, %v; want no duplicate events", count, err)
 	}
-
-	after, found, err := store.Checkpoint(context.Background(), "auth-log", before.Collection.Generation)
-	if err != nil || !found {
-		t.Fatalf("checkpoint after rejection: found=%v err=%v", found, err)
-	}
-	if after.RecordNumber != checkpoint.RecordNumber ||
-		after.ByteOffset == nil || *after.ByteOffset != *checkpoint.ByteOffset {
-		t.Fatalf("checkpoint advanced after rejection: before=%+v after=%+v", checkpoint, after)
-	}
-	if len(pendingEvents(t, store)) != 1 {
-		t.Fatal("malformed record was persisted or valid record after it was consumed")
+	if len(pendingEvents(t, store)) != 2 {
+		t.Fatal("restart duplicated the unparsed evidence or the valid login")
 	}
 }
 
@@ -815,37 +807,6 @@ func TestCrashAfterCheckpointAdvanceSkipsOnRestart(t *testing.T) {
 	if store.appended[0].Collection.Position.RecordNumber != 2 {
 		t.Fatalf("restart record = %d, want 2",
 			store.appended[0].Collection.Position.RecordNumber)
-	}
-}
-
-func TestIgnoredRecordAdvancesButMalformedRecordStops(t *testing.T) {
-	store := newTestStore(t, 0)
-	path := filepath.Join(t.TempDir(), "auth.log")
-	malformed := "Nov  9 10:16:00 web-01 sshd[200]: Failed password for from not-an-ip port ssh2\n"
-	writeLog(t, path, irrelevantLines(1)+malformed+acceptedV6)
-	collector := newTestCollector(t, store, path)
-
-	count, err := poll(t, collector)
-	if count != 0 || !errors.Is(err, ErrRejectedRecord) {
-		t.Fatalf("poll = %d, %v; want 0, ErrRejectedRecord", count, err)
-	}
-	active, found, err := store.ActiveGeneration(context.Background(), "auth-log")
-	if err != nil || !found {
-		t.Fatalf("active generation: found=%v err=%v", found, err)
-	}
-	checkpoint, found, err := store.Checkpoint(context.Background(), "auth-log", active.Generation)
-	if err != nil || !found {
-		t.Fatalf("checkpoint: found=%v err=%v", found, err)
-	}
-	if checkpoint.RecordNumber != 1 {
-		t.Fatalf("checkpoint record = %d, want 1 (ignored record only)",
-			checkpoint.RecordNumber)
-	}
-	if checkpoint.ByteOffset == nil || *checkpoint.ByteOffset != 0 {
-		t.Fatalf("checkpoint offset = %v, want 0", checkpoint.ByteOffset)
-	}
-	if len(pendingEvents(t, store)) != 0 {
-		t.Fatal("malformed record or the event after it was persisted")
 	}
 }
 

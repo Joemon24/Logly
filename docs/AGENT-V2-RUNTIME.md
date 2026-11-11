@@ -73,7 +73,7 @@ Component failures are logged with a stable `reason` and an operator `hint`:
 
 | Reason | Meaning |
 |---|---|
-| `rejected_record` | A malformed/oversized sshd record stopped the checkpoint. Fix or rotate the log. |
+| `rejected_record` | An oversized record or another hard rejection stopped the checkpoint. Fix or rotate the log. |
 | `coverage_gap` | An offline rotation lost unread input; the gap is reported, not hidden. |
 | `storage_failure` | The outbox write failed; the checkpoint was not advanced. |
 | `kafka_unavailable` | Publish failed; events stay in the outbox. |

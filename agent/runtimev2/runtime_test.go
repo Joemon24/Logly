@@ -253,7 +253,7 @@ func TestRestartDeliversPendingEvents(t *testing.T) {
 
 func TestRunStopsOnRejectedRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.log")
-	line := "Nov 10 10:00:03 web-01 sshd[102]: Failed password for\n"
+	line := strings.Repeat("x", events.MaxRawEvidenceBytes+1) + "\n"
 	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
