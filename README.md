@@ -1,20 +1,70 @@
 # Logly v2.0
 
-Logly collects Linux security telemetry and ties SSH detections to their supporting events. The React SOC dashboard supports event search, incident timelines, host history and an evidence-grounded Investigator. The standalone Simulation Lab uses four recorded synthetic fixtures.
+Logly is a distributed Linux security monitoring and incident investigation system. It collects host telemetry, correlates SSH activity into incidents, and lets analysts trace each detection to its source events in a React dashboard. Durable collection checkpoints and replay-safe ingestion keep events recoverable when Kafka or Elasticsearch is temporarily unavailable.
 
-| Component | Verification status |
+**[Try the live Simulation Lab](https://joemon24.github.io/Logly/lab.html)** · **[Browse the GitHub repository](https://github.com/Joemon24/Logly)**
+
+## Try the demo
+
+| Experience | What runs |
 | --- | --- |
-| Go v2 file checkpoints, SQLite outbox, Kafka dispatch and replay | VERIFIED by automated and local real-stack tests. |
-| SSH brute force, password spraying and suspicious successful login | VERIFIED by labeled fixtures and local real-stack tests. |
-| Sudo, account changes, selected audit executions and watched-file access | VERIFIED through the local stack with fixture records. Live Ubuntu auditd and systemd remain unverified. |
-| Incident Investigator and deterministic fallback | VERIFIED by fixture tests, live Elasticsearch queries and a local Ollama routing smoke check. |
-| Simulation Lab | VERIFIED by recorded rule replay and standalone build. Public deployment is pending. |
-| Isolation Forest | EXPERIMENTAL. The offline pipeline is available. Representative training and evaluation data have not been supplied. |
-| Authenticated public SOC, automatic response, and comprehensive Linux audit coverage | NOT IMPLEMENTED. |
+| **Public Simulation Lab** | GitHub Pages serves four recorded replays generated from synthetic fixtures. Step through SSH brute force, password spraying, suspicious login success, or benign activity and inspect the rule matches and cited events. The browser uses bundled data with no connection to live hosts or backend services. |
+| **Full local system** | Go collectors read host logs. Kafka carries events to the Python consumer, which stores events and incidents in Elasticsearch. A private FastAPI service powers event search, incident timelines, host history, and the Investigator. Local Ollama is optional. |
 
-## Local development
+Start with **SSH brute force** to see how five authentication failures become one rule match. Then try **Benign authentication** to see a replay without a match.
 
-Use Python 3.12 or 3.13, Go 1.23+, Node compatible with the pinned Vite version, and Docker Compose for Kafka and Elasticsearch. Use a dedicated local test environment. The default Compose detector consumes the v1 topic. The v2 integration script launches its own v2 consumer and agent.
+## Screenshot
+
+![Live Simulation Lab showing five synthetic SSH failures, one rule match, and cited event references](docs/screenshots/simulation-lab.jpg)
+
+*The deployed Lab after replaying the five-event SSH brute-force fixture.*
+
+## Architecture
+
+```mermaid
+flowchart TD
+    logs["Linux authentication and optional audit logs"]
+    agent["Go collector and SQLite outbox"]
+    kafka["Apache Kafka"]
+    consumer["Python consumer and SSH detection rules"]
+    search["Elasticsearch event and incident indices"]
+    api["Private FastAPI and Investigator"]
+    ui["React analyst dashboard"]
+    ollama["Optional local Ollama"]
+
+    logs --> agent
+    agent -->|"Publish queued events"| kafka
+    kafka --> consumer
+    consumer -->|"Persist events and incidents"| search
+    search -->|"Retrieve stored evidence"| api
+    api -->|"Same-origin API via Vite proxy"| ui
+    api -.->|"Question topic selection only"| ollama
+```
+
+- **Durable collection.** The Go agent persists source generations, file checkpoints, and pending events in SQLite. An event leaves the outbox after Kafka acknowledges it.
+- **Replay-safe ingestion.** Stable event IDs support deduplication in Elasticsearch. The Python consumer commits Kafka offsets after the required writes and incident analysis succeed.
+- **Evidence-linked detection.** Deterministic SSH rules identify brute force, password spraying, and a suspicious successful login following failures. Incident timelines reference the events that supported the finding.
+- **Broader telemetry.** Supported sudo and account events can be collected from authentication logs. Optional audit logs add selected process executions and watched-file access. These categories are searchable, while the incident rules above are SSH-specific.
+
+### AI-assisted investigation
+
+The read-only Investigator uses stored evidence to reproduce an incident rule where possible, link citations to event rows, and flag missing evidence. It can surface host history, related incidents, and suggested next steps. With `LOGLY_OLLAMA_MODEL` configured, local Ollama classifies the analyst’s question into a supported topic. Python retrieves the records and renders the findings and citations. Ollama receives the question without log text or storage access. If the model is unavailable or returns an unsupported topic, deterministic routing takes over.
+
+## Verified results
+
+| Check | Recorded result |
+| --- | --- |
+| Docker-backed integration on macOS | **53 passed, 0 failed** across 14 scenarios, including broker outage, restart, deduplication, and Elasticsearch recovery |
+| Python | **59 tests passed**, plus **16 passing subtests** |
+| Go | **106 top-level tests passed** with the race detector across 8 test packages. `go vet` passed. |
+| Frontend | **10 tests passed**. Lint, type checks, and both production builds passed. |
+| npm audit | **0 vulnerabilities** reported in the verification run |
+
+The outage test confirmed that a failed Elasticsearch write left the Kafka offset uncommitted. After recovery, the consumer stored one copy and committed offset 1 with zero lag. See the [real-stack verification procedure](docs/V2-INTEGRATION-VERIFICATION.md).
+
+## Run locally
+
+Use Python 3.12 or 3.13, Go 1.23+, Node.js 24, and Docker Compose. From the repository root, create the Python environment and run the v2 stack verification:
 
 ```sh
 python3 -m venv .venv
@@ -23,9 +73,9 @@ pip install -r central-server-py/requirements.txt
 PYTHON="$PWD/.venv/bin/python" bash scripts/verify-v2-integration.sh
 ```
 
-The opt-in suite stops and restarts local Kafka and Elasticsearch as part of outage tests. It needs Docker access and leaves synthetic verification records in the configured local stack. See [stack verification](docs/V2-INTEGRATION-VERIFICATION.md) before running.
+Use a dedicated local test environment. The suite restarts Kafka and Elasticsearch to verify outage recovery, leaves synthetic test records, and starts its own v2 agent and consumer. The default Compose detector is configured for v1. For a persistent v2 setup, follow the [completion guide](docs/V2-COMPLETION.md).
 
-With Elasticsearch accessible on a trusted loopback endpoint, start the read API and dashboard in separate terminals.
+With Elasticsearch reachable on loopback, start the API and dashboard in separate terminals from the repository root:
 
 ```sh
 cd central-server-py
@@ -38,13 +88,62 @@ npm ci
 npm run dev
 ```
 
-For a standalone walkthrough, run `npm run build:lab` in `frontend`, then serve only `dist-lab` with a static server and open `lab.html`. Its data is generated from checked-in synthetic fixtures. For local preview use `python3 -m http.server 4173 --bind 127.0.0.1 --directory dist-lab`.
+For a local copy of the static demo:
 
-## Engineering and release review
+```sh
+cd frontend
+npm ci
+npm run build:lab
+python3 -m http.server 4173 --bind 127.0.0.1 --directory dist-lab
+```
 
-- [Completion guide and known limitations](docs/V2-COMPLETION.md)
-- [Ubuntu v2 validation](docs/LINUX-DEPLOYMENT.md)
-- [Go v2 runtime](docs/AGENT-V2-RUNTIME.md) and [schema](docs/AGENT-SCHEMA-V2.md)
+Open [localhost:4173/lab.html](http://127.0.0.1:4173/lab.html).
+
+### Test individual components
+
+Run each block from the repository root after installing its dependencies.
+
+```sh
+PYTHONPATH=central-server-py .venv/bin/python -m unittest discover -s central-server-py/tests -v
+```
+
+```sh
+cd agent
+go test -race ./...
+go vet ./...
+```
+
+```sh
+cd frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run build:lab
+npm audit
+```
+
+## Technology stack
+
+| Layer | Tools |
+| --- | --- |
+| Collection and local persistence | Go, SQLite |
+| Streaming, detection, and search | Apache Kafka, Python, Elasticsearch |
+| API and dashboard | FastAPI, React, TypeScript, Vite |
+| Investigation and experiments | Ollama (optional), scikit-learn (offline experiment) |
+| Local stack and demo hosting | Docker Compose, GitHub Actions, GitHub Pages |
+
+## Current limitations
+
+- **Ubuntu validation:** Live auditd, systemd, and file-watch operation still need verification on Ubuntu. The real-stack checks ran on macOS with fixture data.
+- **Anomaly detection:** Isolation Forest is experimental and runs offline. It has no effect on incident decisions, and accuracy on representative data is unmeasured.
+- **LLM evaluation:** Local Ollama routing was smoke-tested on five questions. Broader routing and investigation quality have yet to be measured.
+- **Deployment boundary:** FastAPI is unauthenticated and intended for private development only. Keep it and the development data services on a trusted local network.
+
+## Documentation
+
+- [Completion guide and v2 setup](docs/V2-COMPLETION.md)
+- [Go agent runtime](docs/AGENT-V2-RUNTIME.md) and [event schema](docs/AGENT-SCHEMA-V2.md)
 - [Python delivery and deduplication](docs/PYTHON-CONSUMER-V2.md)
 - [Incident rules and evidence](docs/INCIDENT-INTELLIGENCE.md)
-- [Dashboard development](frontend/README.md)
+- [Ubuntu validation](docs/LINUX-DEPLOYMENT.md) and [dashboard development](frontend/README.md)
