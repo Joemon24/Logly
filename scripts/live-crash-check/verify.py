@@ -11,7 +11,7 @@ from uuid import uuid4
 from elasticsearch import Elasticsearch
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
-from kafka.errors import NoBrokersAvailable, UnrecognizedBrokerVersion
+from kafka.errors import CoordinatorNotAvailableError, NoBrokersAvailable, UnrecognizedBrokerVersion
 from kafka.structs import TopicPartition
 
 from api.schema_v2 import compute_event_id, validate_event_v2
@@ -123,7 +123,10 @@ try:
 
     def warmup():
         check_alive(first, "consumer-crash.log")
-        return offset() == 4
+        try:
+            return offset() == 4
+        except CoordinatorNotAvailableError:
+            return False
 
     wait_for(warmup, "the first four records to commit")
     check(event_count() == 4 and incident() is None, "Unexpected warmup event or incident count")
