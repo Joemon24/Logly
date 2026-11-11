@@ -2,23 +2,27 @@ package collector
 
 import (
 	"fmt"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"agent/events"
 )
 
-// SSH record patterns cover the common OpenSSH authentication messages emitted
-// by password, publickey, and keyboard-interactive methods. The syslog prefix,
-// if any, is ignored: the patterns match anywhere in the line.
+// Match an OpenSSH message at the start of the record or after an sshd
+// syslog envelope. Text embedded in a different message is not an auth record.
+const sshAddress = ` from (\S+)(?: port ([0-9]+))?(?: ssh2(?:: (.*))?)?(?: \[preauth\])?$`
+
 var (
-	sshFailed = regexp.MustCompile(
-		`(?i:failed) (?:password|publickey|keyboard-interactive/pam) for (?:invalid user |illegal user )?(\S+) from (\S+)(?: port \d+)?`)
-	sshAccepted = regexp.MustCompile(
-		`(?i:accepted) (?:password|publickey|keyboard-interactive/pam) for (\S+) from (\S+)(?: port \d+)?`)
-	sshInvalidUser = regexp.MustCompile(
-		`(?i:invalid) user (\S+) from (\S+)(?: port \d+)?`)
+	sshPrefix          = regexp.MustCompile(`^(?:(?:[A-Z][a-z]{2} +[0-9]{1,2} +[0-9:]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2}T\S+) +\S+ +)?sshd(?:-session|-auth)?(?:\[[0-9]+\])?: +`)
+	sshLogin           = regexp.MustCompile(`^(?i:(Failed|Accepted)) (?:password|publickey|keyboard-interactive/pam) for (invalid user |illegal user )?(\S+)` + sshAddress)
+	sshEmbeddedAddress = regexp.MustCompile(` from \S+ port [0-9]+ ssh2(?:[: ]|$)`)
+	sshInvalidUser     = regexp.MustCompile(`^(?i:Invalid) user (\S+)` + sshAddress)
+	sshAuthMarker      = regexp.MustCompile(`(?i)^(?:(?:failed|accepted) (?:password|publickey|keyboard-interactive)(?:[ /]|$)|invalid user(?: |$))`)
 )
 
 type authRecord struct {
@@ -37,55 +41,51 @@ type authRecord struct {
 // lines that look like SSH authentication but cannot be parsed, so the caller
 // can reject them instead of silently skipping them.
 func parseAuthLine(line string) (authRecord, bool, error) {
-	if match := sshFailed.FindStringSubmatch(line); match != nil {
-		return authRecord{
-			Action:  "ssh_login",
-			Outcome: "failure",
-			User:    match[1],
-			IP:      match[2],
-		}, true, nil
+	message := strings.TrimRight(line, "\r\n")
+	if prefix := sshPrefix.FindStringIndex(message); prefix != nil {
+		message = message[prefix[1]:]
 	}
-	if match := sshAccepted.FindStringSubmatch(line); match != nil {
-		return authRecord{
-			Action:  "ssh_login",
-			Outcome: "success",
-			User:    match[1],
-			IP:      match[2],
-		}, true, nil
+	if !sshAuthMarker.MatchString(message) {
+		return authRecord{}, false, nil
 	}
-	if match := sshInvalidUser.FindStringSubmatch(line); match != nil {
-		return authRecord{
-			Action:  "ssh_invalid_user",
-			Outcome: "failure",
-			User:    match[1],
-			IP:      match[2],
-		}, true, nil
+	if !utf8.ValidString(line) {
+		return authRecord{}, true, fmt.Errorf("invalid UTF-8 in sshd authentication record")
 	}
-	if looksLikeSSHAuth(line) {
-		return authRecord{}, true, fmt.Errorf("unrecognized sshd authentication record")
-	}
-	return authRecord{}, false, nil
-}
 
-func looksLikeSSHAuth(line string) bool {
-	lower := strings.ToLower(line)
-	if !strings.Contains(lower, "sshd") {
-		return false
+	action, outcome := "ssh_invalid_user", "failure"
+	fields := sshInvalidUser.FindStringSubmatch(message)
+	if fields == nil {
+		login := sshLogin.FindStringSubmatch(message)
+		if login == nil {
+			return authRecord{}, true, fmt.Errorf("unrecognized sshd authentication record")
+		}
+		action = "ssh_login"
+		if strings.EqualFold(login[1], "Accepted") {
+			if login[2] != "" {
+				return authRecord{}, true, fmt.Errorf("contradictory sshd authentication record")
+			}
+			outcome = "success"
+		}
+		fields = login[2:]
 	}
-	for _, marker := range []string{
-		"failed password",
-		"failed publickey",
-		"failed keyboard-interactive",
-		"accepted password",
-		"accepted publickey",
-		"accepted keyboard-interactive",
-		"invalid user",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
+	user, ip, port, suffix := fields[1], fields[2], fields[3], fields[4]
+	// Username text can imitate the address delimiter. Reject a second
+	// endpoint in the suffix instead of attributing the event to the first.
+	if sshEmbeddedAddress.MatchString(suffix) {
+		return authRecord{}, true, fmt.Errorf("ambiguous address in sshd authentication record")
+	}
+	if strings.ContainsFunc(user, unicode.IsControl) || strings.ContainsFunc(user, unicode.IsSpace) {
+		return authRecord{}, true, fmt.Errorf("invalid username in sshd authentication record")
+	}
+	if addr, err := netip.ParseAddr(ip); err != nil || addr.Zone() != "" {
+		return authRecord{}, true, fmt.Errorf("invalid IP in sshd authentication record")
+	}
+	if port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return authRecord{}, true, fmt.Errorf("invalid port in sshd authentication record")
 		}
 	}
-	return false
+	return authRecord{Action: action, Outcome: outcome, User: user, IP: ip}, true, nil
 }
 
 // parseAuthTimestamp understands RFC3339 prefixes and the classic syslog
@@ -106,7 +106,9 @@ func parseAuthTimestamp(line string, now time.Time) (time.Time, bool) {
 			if candidate.After(now.Add(24 * time.Hour)) {
 				candidate = candidate.AddDate(-1, 0, 0)
 			}
-			return candidate, true
+			if candidate.Month() == parsed.Month() && candidate.Day() == parsed.Day() {
+				return candidate, true
+			}
 		}
 	}
 	return time.Time{}, false

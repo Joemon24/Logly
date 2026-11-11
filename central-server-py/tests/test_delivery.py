@@ -39,12 +39,16 @@ class FakeElasticsearch:
     """In-memory subset of the Elasticsearch client used by the consumer."""
 
     def __init__(self, calls, documents=None, fail_create=False, fail_search=False,
-                 fail_incident_type=None):
+                 fail_incident_type=None, refresh_failed=False, competing_write=None):
+        self.refresh_failed = refresh_failed
         self.calls = calls
+        self.queries = []
         self.store = {
             key: copy.deepcopy(document)
             for key, document in (documents or {}).items()
         }
+        self.versions = dict.fromkeys(self.store, 1)
+        self.competing_write = competing_write
         self.fail_create = fail_create
         self.fail_search = fail_search
         self.fail_incident_type = fail_incident_type
@@ -59,7 +63,7 @@ class FakeElasticsearch:
             raise RuntimeError('incident write unavailable')
         if (index, id) in self.store:
             raise FakeConflictError('document already exists')
-        self.store[(index, id)] = copy.deepcopy(document)
+        return self.write(index, id, document)
 
     def get(self, index, id):
         self.calls.append(('get', index, id))
@@ -67,16 +71,30 @@ class FakeElasticsearch:
             raise FakeNotFoundError('document missing')
         return {
             '_source': copy.deepcopy(self.store[(index, id)]),
-            '_seq_no': 1,
+            '_seq_no': self.versions[(index, id)],
             '_primary_term': 1,
         }
 
     def index(self, index, id, document, **kwargs):
         self.calls.append(('index', index, id))
-        self.store[(index, id)] = copy.deepcopy(document)
+        return self.write(index, id, document, stage='takeover', **kwargs)
+
+    def write(self, index, id, document, stage=None, if_seq_no=None, if_primary_term=None):
+        key = (index, id)
+        version = self.versions.get(key, 0)
+        if self.competing_write and self.competing_write[0] == stage:
+            self.store[key] = copy.deepcopy(self.competing_write[1])
+            version += 1
+            self.versions[key] = version
+        if if_seq_no is not None and (if_seq_no != version or if_primary_term != 1):
+            raise FakeConflictError('version conflict')
+        self.store[key] = copy.deepcopy(document)
+        self.versions[key] = version + 1
+        return {'_seq_no': version + 1, '_primary_term': 1}
 
     def search(self, index, query=None, size=10, sort=None, from_=0, **kwargs):
         self.calls.append(('search', index))
+        self.queries.append(query)
         if self.fail_search == 'partial':
             return {'timed_out': True, 'hits': {'hits': []}}
         if self.fail_search:
@@ -101,19 +119,22 @@ class FakeElasticsearch:
 
     def refresh(self, index):
         self.calls.append(('refresh', index))
+        return {'_shards': {'failed': int(self.refresh_failed)}}
 
 
 class DeliveryTests(unittest.TestCase):
     def run_consumer(self, fail=False, messages=None, documents=None,
                      fail_create=False, fail_search=False, fail_bulk=None,
-                     partial_bulk=False, expect_error=None, fail_incident_type=None):
+                     partial_bulk=False, expect_error=None, fail_incident_type=None,
+                     refresh_failed=False, competing_write=None):
         calls = []
         event = {'agent': {'agent_id': 'test'}, 'raw': 'user=joe ip=192.0.2.2 success'}
         message = types.SimpleNamespace(topic='ids.events.v1', partition=0, offset=7, value=[event])
         messages = messages or [message]
         client = FakeElasticsearch(
             calls, documents, fail_create=fail_create, fail_search=fail_search,
-            fail_incident_type=fail_incident_type,
+            fail_incident_type=fail_incident_type, refresh_failed=refresh_failed,
+            competing_write=competing_write,
         )
 
         class Consumer:
@@ -126,14 +147,15 @@ class DeliveryTests(unittest.TestCase):
 
         def bulk(es, actions):
             calls.append(('bulk', list(actions)))
-            if partial_bulk:
-                for action in actions:
-                    client.store[(action['_index'], action['_id'])] = copy.deepcopy(action['_source'])
-                raise RuntimeError('storage unavailable')
             if fail or (fail_bulk and fail_bulk(actions)):
                 raise RuntimeError('storage unavailable')
-            for action in actions:
-                client.store[(action['_index'], action['_id'])] = copy.deepcopy(action['_source'])
+            for action in actions[:partial_bulk] if partial_bulk else actions:
+                client.write(
+                    action['_index'], action['_id'], action['_source'], stage='bulk',
+                    if_seq_no=action.get('if_seq_no'), if_primary_term=action.get('if_primary_term'),
+                )
+            if partial_bulk:
+                raise RuntimeError('storage unavailable')
 
         fake_es = types.ModuleType('elasticsearch')
         fake_es.Elasticsearch = lambda *a, **kw: client
@@ -211,7 +233,7 @@ class DeliveryTests(unittest.TestCase):
         message = types.SimpleNamespace(
             topic='ids.events.v2', partition=0, offset=4, value=event)
         documents = {
-            ('ids-events', event['event_id']): {'processed': True, 'event_id': event['event_id']},
+            ('ids-events', event['event_id']): {**event, 'processed': True, 'storage_id': event['event_id']},
         }
         calls, _ = self.run_consumer(messages=[message], documents=documents)
 
@@ -227,9 +249,8 @@ class DeliveryTests(unittest.TestCase):
             topic='ids.events.v2', partition=0, offset=13, value=event)
         documents = {
             ('ids-events', event['event_id']): {
-                'event_id': event['event_id'],
+                **event,
                 'storage_id': event['event_id'],
-                'raw_event': event['raw_event'],
             },
         }
         calls, _ = self.run_consumer(messages=[message], documents=documents)
@@ -274,6 +295,29 @@ class DeliveryTests(unittest.TestCase):
             ['create', 'get', 'index', 'bulk', 'refresh', 'search', 'commit', 'close'],
         )
         self.assertTrue(client.store[('ids-events', event['event_id'])]['processed'])
+
+    def test_claim_and_bulk_cannot_overwrite_a_newer_completion(self):
+        event = load_v2_fixture()
+        key = ('ids-events', event['event_id'])
+        completed = {**event, 'processed': True, 'storage_id': event['event_id']}
+        stale = {
+            'processed': False,
+            'claimed_at': (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+        }
+        for stage, documents in [('takeover', {key: stale}), ('bulk', {})]:
+            with self.subTest(stage=stage):
+                message = types.SimpleNamespace(
+                    topic='ids.events.v2', partition=0, offset=6, value=copy.deepcopy(event),
+                )
+                calls, client = self.run_consumer(
+                    messages=[message], documents=documents, competing_write=(stage, completed),
+                    expect_error=(FakeConflictError, 'version conflict'),
+                )
+                self.assertNotIn('commit', [call[0] for call in calls])
+                self.assertEqual(client.store[key], completed)
+                replay, client = self.run_consumer(messages=[message], documents=client.store)
+                self.assertEqual(replay[-2], ('commit', {('ids.events.v2', 0): (7, '', -1)}))
+                self.assertEqual(client.store[key], completed)
 
     def test_v2_partial_bulk_then_replay_is_idempotent(self):
         event = load_v2_fixture()
@@ -403,6 +447,85 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(suspicious['attack_type'], 'suspicious_login_success')
         self.assertEqual(suspicious['failure_event_ids'], failure_ids)
         self.assertEqual(suspicious['success_event_ids'], [events[-1]['event_id']])
+
+    def test_duplicate_id_in_one_message_does_not_block_offset(self):
+        event = load_v2_fixture()
+        message = types.SimpleNamespace(
+            topic='ids.events.v2', partition=0, offset=9, value=[event, copy.deepcopy(event)],
+        )
+        calls, client = self.run_consumer(messages=[message])
+        self.assertEqual([call[0] for call in calls], ['create', 'bulk', 'refresh', 'search', 'commit', 'close'])
+        self.assertEqual(len(client.store), 1)
+
+    def test_replay_uses_stored_event_and_retries_after_repeated_analysis_failures(self):
+        event = load_v2_fixture()
+        original_id = event['event_id']
+
+        def message(value):
+            return types.SimpleNamespace(topic='ids.events.v2', partition=0, offset=10, value=copy.deepcopy(value))
+
+        calls, client = self.run_consumer(
+            messages=[message(event)], fail_search=True,
+            expect_error=(RuntimeError, 'elasticsearch unavailable'),
+        )
+        self.assertNotIn('commit', [call[0] for call in calls])
+        altered = copy.deepcopy(event)
+        altered['source']['ip'] = '198.51.100.99'
+        altered['event']['outcome'] = 'success'
+        for _ in range(2):
+            calls, client = self.run_consumer(
+                messages=[message(altered)], documents=client.store, fail_search=True,
+                expect_error=(RuntimeError, 'elasticsearch unavailable'),
+            )
+            self.assertEqual([call[0] for call in calls], ['create', 'get', 'refresh', 'search', 'close'])
+            self.assertEqual(client.store[('ids-events', original_id)]['source'], event['source'])
+        calls, recovered = self.run_consumer(messages=[message(altered)], documents=client.store)
+        self.assertEqual(calls[-2], ('commit', {('ids.events.v2', 0): (11, '', -1)}))
+        self.assertEqual(recovered.store, client.store)
+        self.assertIn({'term': {'src_ip.keyword': event['source']['ip']}}, recovered.queries[0]['bool']['filter'])
+
+    def test_partial_refresh_leaves_offset_uncommitted_and_replay_recovers(self):
+        def message():
+            return types.SimpleNamespace(topic='ids.events.v2', partition=0, offset=11, value=load_v2_fixture())
+        calls, client = self.run_consumer(
+            messages=[message()], refresh_failed=True,
+            expect_error=(RuntimeError, 'incomplete Elasticsearch event refresh'),
+        )
+        self.assertEqual([call[0] for call in calls], ['create', 'bulk', 'refresh', 'close'])
+        calls, recovered = self.run_consumer(messages=[message()], documents=client.store)
+        self.assertEqual(calls[-2], ('commit', {('ids.events.v2', 0): (12, '', -1)}))
+        self.assertEqual(recovered.store, client.store)
+
+    def test_mixed_partial_bulk_waits_for_stale_claim_then_recovers(self):
+        from api.schema_v2 import compute_event_id
+
+        first, second = load_v2_fixture(), load_v2_fixture()
+        second['collection']['position']['record_number'] += 1
+        second['event_id'] = compute_event_id(second)
+
+        def message():
+            return types.SimpleNamespace(topic='ids.events.v2', partition=0, offset=12,
+                                         value=copy.deepcopy([first, second]))
+
+        calls, client = self.run_consumer(
+            messages=[message()], partial_bulk=1, expect_error=(RuntimeError, 'storage unavailable'),
+        )
+        self.assertNotIn('commit', [call[0] for call in calls])
+        first_key = ('ids-events', first['event_id'])
+        second_key = ('ids-events', second['event_id'])
+        original = copy.deepcopy(client.store[first_key])
+        self.assertTrue(original['processed'])
+        self.assertFalse(client.store[second_key]['processed'])
+        calls, client = self.run_consumer(
+            messages=[message()], documents=client.store,
+            expect_error=(RuntimeError, 'claimed by another consumer'),
+        )
+        self.assertNotIn('commit', [call[0] for call in calls])
+        client.store[second_key]['claimed_at'] = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        calls, recovered = self.run_consumer(messages=[message()], documents=client.store)
+        self.assertEqual(calls[-2], ('commit', {('ids.events.v2', 0): (13, '', -1)}))
+        self.assertEqual(recovered.store[first_key], original)
+        self.assertTrue(recovered.store[second_key]['processed'])
 
     def test_v2_invalid_event_is_rejected_and_committed(self):
         event = load_v2_fixture()

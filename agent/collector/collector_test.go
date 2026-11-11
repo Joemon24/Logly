@@ -566,7 +566,7 @@ func TestOversizedRecordStopsWithoutAdvancing(t *testing.T) {
 func TestLongRecordWithinLimitIsAccepted(t *testing.T) {
 	store := newTestStore(t, 0)
 	path := filepath.Join(t.TempDir(), "auth.log")
-	prefix := "Nov  9 10:15:30 web-01 sshd[123]: Failed password for alice from 203.0.113.9 port 50000 ssh2 "
+	prefix := "Nov  9 10:15:30 web-01 sshd[123]: Failed publickey for alice from 203.0.113.9 port 50000 ssh2: RSA SHA256:"
 	padding := strings.Repeat("x", events.MaxRawEvidenceBytes-len(prefix)-1)
 	line := prefix + padding + "\n"
 	if len(line) != events.MaxRawEvidenceBytes {
@@ -1270,5 +1270,43 @@ func TestStorageFailureKeepsPendingEventAndCheckpoint(t *testing.T) {
 	}
 	if len(store.attempts) != 2 {
 		t.Fatalf("append attempts after retry = %d, want 2", len(store.attempts))
+	}
+}
+
+func TestRecreatedDatabaseStartsNewAgentGenerationAndRecollectsCurrentFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.log")
+	db := filepath.Join(dir, "outbox.db")
+	writeLog(t, path, failedIPv4)
+	store := newTestStoreAt(t, db, 0)
+	first := newTestCollector(t, store, path)
+	if n, err := poll(t, first); n != 1 || err != nil {
+		t.Fatalf("first collection = %d, %v", n, err)
+	}
+	original := pendingEvents(t, store)[0]
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(db); err != nil {
+		t.Fatal(err)
+	}
+
+	store = newTestStoreAt(t, db, 0)
+	second := newTestCollector(t, store, path)
+	t.Cleanup(func() { _ = second.Close() })
+	if n, err := poll(t, second); n != 1 || err != nil {
+		t.Fatalf("collection with recreated DB = %d, %v", n, err)
+	}
+	recollected := pendingEvents(t, store)[0]
+	if original.Agent.Generation == recollected.Agent.Generation || original.EventID == recollected.EventID {
+		t.Fatal("database recreation reused the previous agent generation or event ID")
+	}
+	if original.Collection.Generation != recollected.Collection.Generation ||
+		recollected.Collection.Position.RecordNumber != 1 ||
+		recollected.Collection.Position.ByteOffset == nil || *recollected.Collection.Position.ByteOffset != 0 {
+		t.Fatalf("same inode did not start from the beginning: %+v", recollected.Collection)
 	}
 }

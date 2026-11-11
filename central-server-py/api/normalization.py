@@ -14,16 +14,28 @@ def raw_text(event):
 def extract_ip(event):
     source = event.get('source', {})
     candidate = source.get('ip') if isinstance(source, dict) else None
-    if not candidate:
-        match = re.search(r'(?:\bip=|\bfrom\s+)([0-9a-fA-F:.]+)', raw_text(event))
+    if event.get('schema_version') == 2:
+        if not isinstance(source, dict) or source.get('entity_type') != 'ip':
+            return 'unknown'
+    elif not candidate:
+        match = re.search(r'(?:\bip=|\bfrom\s+)(\S+)', raw_text(event))
         candidate = match.group(1) if match else None
+    if not isinstance(candidate, str) or '%' in candidate:
+        return 'unknown'
     try:
         return str(ipaddress.ip_address(candidate))
-    except (ValueError, TypeError):
+    except ValueError:
         return 'unknown'
 
 
 def extract_user(event):
+    if event.get('schema_version') == 2:
+        target = event.get('target')
+        if isinstance(target, dict) and target.get('entity_type') == 'user':
+            name = target.get('name')
+            if isinstance(name, str) and name:
+                return name
+        return 'unknown'
     raw = raw_text(event)
     match = re.search(r'\buser=([^\s]+)', raw)
     if not match:
@@ -34,8 +46,10 @@ def extract_user(event):
 def extract_outcome(event):
     metadata = event.get('event', {})
     outcome = metadata.get('outcome') if isinstance(metadata, dict) else None
-    if outcome in {'failure', 'success'}:
+    if outcome in ('failure', 'success'):
         return outcome
+    if event.get('schema_version') == 2:
+        return 'unknown'
     raw = raw_text(event).lower()
     if 'failed' in raw or 'failure' in raw:
         return 'failure'
