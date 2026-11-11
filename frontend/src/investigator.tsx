@@ -2,6 +2,12 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { request, type Investigation } from './api'
 
+const modeLabels: Record<Investigation['mode'], string> = {
+  deterministic: 'Deterministic review',
+  ollama: 'Ollama selected the topic',
+  groq: 'Groq selected the topic',
+}
+
 export function Investigator({ incidentId, timelineIds }: { incidentId: string; timelineIds: Set<string> }) {
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState<Investigation>()
@@ -42,7 +48,7 @@ export function Investigator({ incidentId, timelineIds }: { incidentId: string; 
     </form>
     {error && <p role="alert">{error}</p>}
     {answer && <div className="investigator-answer" aria-live="polite">
-      <p className="muted">{answer.mode === 'ollama' ? 'Ollama selected the topic' : 'Deterministic review'}</p>
+      <p className="muted">{modeLabels[answer.mode]}</p>
       <h3>Detection rule</h3>
       <p>{answer.rule}</p>
       {answer.observations.length > 0 && <><h3>Observed evidence</h3>

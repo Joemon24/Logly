@@ -14,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.incident_intelligence import EVENT_INDEX, INCIDENT_INDEX
 from api.settings import elasticsearch_client
-from api.investigator import InvestigationTools, configured_provider, investigate
+from api.investigator import InvestigationTools, investigate
+from api.investigator_routing import configured_provider
 
 es = elasticsearch_client()
 

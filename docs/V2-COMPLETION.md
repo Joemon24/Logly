@@ -29,7 +29,7 @@ The existing GET routes are `/api/overview`, `/api/events`, `/api/incidents`, `/
 
 The server owns four bounded read operations: get the incident, fetch up to 50 valid referenced event IDs, retrieve aggregate history for up to three hosts, and list up to five related incidents for the stored source IP. It reuses the production rule predicates and emits only citations present in retrieved records. Incident merging, unavailable references and caps can prevent independent reproduction. Storage failures surface as errors instead of being reported as empty evidence. Raw evidence needed by the existing predicates stays in the API process.
 
-Set `LOGLY_OLLAMA_MODEL` when running FastAPI locally to opt into topic classification with a small installed Ollama model. The provider sends the analyst question to loopback Ollama. It gives Ollama no log text, tools or storage access. A two-request concurrency limit, short socket timeout, output cap and topic allowlist constrain the request. Python renders facts and citations. Unavailable providers or invalid output fall back to deterministic topic selection. Load the model before the walkthrough if cold startup exceeds the request timeout. Do not include credentials in analyst questions. Free-form model-written narratives are outside this implementation.
+Use deterministic routing, local Ollama, or opt-in Groq for follow-up topic selection. Python controls all evidence retrieval, rule reproduction, and citation rendering. See [Investigator providers](INVESTIGATOR-PROVIDERS.md) for configuration, privacy boundaries, and the reproducible evaluation.
 
 ## Experimental anomaly detection
 

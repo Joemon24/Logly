@@ -1,10 +1,7 @@
 """Read-only investigator. The model chooses a topic; Python renders all claims."""
-import json
-import os
 import re
-from threading import BoundedSemaphore
-from typing import Protocol
-from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+
+from api.investigator_routing import choose_topic
 
 from api.normalization import extract_ip, extract_outcome, extract_user
 
@@ -15,80 +12,12 @@ from api.incident_intelligence import (
 )
 
 EVIDENCE_LIMIT = 50
-TOPICS = ("summary", "source", "hosts", "related", "gaps", "next")
 EVENT_ID = re.compile(r"evt2_[0-9a-f]{64}")
 RULES = {
     BRUTE_FORCE: "At least five SSH failures from one source IP in five minutes.",
     PASSWORD_SPRAYING: "SSH failures from one IP across at least five known usernames in five minutes.",
     SUSPICIOUS_SUCCESS: "A successful SSH login after at least three failures for the same IP and username in ten minutes.",
 }
-MODEL_SLOTS = BoundedSemaphore(2)
-
-
-class TopicProvider(Protocol):
-    def topic(self, question: str) -> str: ...
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-class OllamaTopicProvider:
-    def __init__(self, model):
-        self.model = model
-        self.opener = build_opener(ProxyHandler({}), NoRedirect())
-
-    def topic(self, question):
-        if not MODEL_SLOTS.acquire(blocking=False):
-            raise ValueError("inference busy")
-        try:
-            payload = {
-                "model": self.model, "stream": False, "think": False,
-                "options": {"num_predict": 16, "num_ctx": 1024, "temperature": 0},
-                "format": {"type": "string", "enum": list(TOPICS)},
-                "system": (
-                    "Classify an incident investigation question. Select summary for a general review; "
-                    "source for IP addresses; hosts for affected machines; related for other incidents; "
-                    "gaps for missing evidence or proof of compromise; next for recommended analyst actions."
-                ),
-                "prompt": question,
-            }
-            request = Request("http://127.0.0.1:11434/api/generate",
-                              data=json.dumps(payload).encode(),
-                              headers={"Content-Type": "application/json"})
-            with self.opener.open(request, timeout=3) as response:
-                body = json.loads(response.read(8192))
-            return json.loads(body["response"])
-        finally:
-            MODEL_SLOTS.release()
-
-
-def configured_provider():
-    model = os.getenv("LOGLY_OLLAMA_MODEL", "").strip()
-    return OllamaTopicProvider(model) if model else None
-
-
-def choose_topic(question, provider):
-    if not question:
-        return "summary", "deterministic"
-    if provider:
-        try:
-            topic = provider.topic(question)
-            if topic in TOPICS:
-                return topic, "ollama"
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            pass
-    for topic, terms in (
-        ("related", ("related", "other incidents")),
-        ("gaps", ("missing", "unknown", "gaps", "compromise", "proven")),
-        ("hosts", ("host", "machine")),
-        ("source", ("source", "address", " ip")),
-        ("next", ("next", "recommend", "should")),
-    ):
-        if any(term in question.lower() for term in terms):
-            return topic, "deterministic"
-    return "summary", "deterministic"
 
 
 class InvestigationTools:
