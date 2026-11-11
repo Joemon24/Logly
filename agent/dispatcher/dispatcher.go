@@ -59,6 +59,13 @@ type Message struct {
 	Value []byte
 }
 
+// DeliveryKey is the Kafka message key for an outbox entry: the stable
+// agent/source identity, so all events from one source share a partition and
+// keep their relative order. event_id stays in the payload for deduplication.
+func DeliveryKey(entry storage.OutboxEntry) []byte {
+	return []byte(entry.AgentID + "/" + entry.SourceID)
+}
+
 // Producer publishes a batch and must not report success before the broker has
 // acknowledged every message it accepted. A non-nil error means delivery is
 // unknown and the caller will retain the events for retry.
@@ -246,7 +253,7 @@ func (d *Dispatcher) DispatchOnce(ctx context.Context) (int, error) {
 	for i, entry := range entries {
 		// Pass the stored bytes through unchanged: no unmarshal, remarshal, or
 		// event reconstruction on the delivery path.
-		messages[i] = Message{Key: []byte(entry.EventID), Value: entry.Payload}
+		messages[i] = Message{Key: DeliveryKey(entry), Value: entry.Payload}
 		ids[i] = entry.EventID
 	}
 

@@ -16,7 +16,7 @@ Delivery is **at-least-once**, not exactly-once.
 1. `storage.Pending(ctx, limit)` reads up to `BatchSize` rows in outbox `seq`
    order. The limit is bounded by `storage.MaxPendingLimit` (1000).
 2. Each row is published as one Kafka record:
-   - key = the stored `event_id`,
+   - key = `<agent_id>/<source_id>` (the stable source identity),
    - value = the exact stored JSON bytes (no unmarshal, remarshal, or event
      reconstruction).
 3. The producer must wait for broker acknowledgement
@@ -86,8 +86,10 @@ Shutdown:
 The dispatcher has **one worker and one in-flight publish**, so:
 
 - Batches are read in outbox insertion order and published sequentially.
-- Kafka keys are hashed to partitions, so records sharing an `event_id` key also
-  share a partition.
+- Kafka keys are hashed to partitions, so all events from one agent/source pair
+  share a partition and keep their relative order. `event_id` stays in the
+  payload and is the only deduplication identity. Keying on `event_id` would
+  scatter one source's consecutive events across partitions and lose ordering.
 - Within this process, a failed batch is retried before the next batch, so
   retries do not reorder later batches.
 - Producer-internal retries are disabled (`MaxAttempts=1`); the dispatcher owns
@@ -127,7 +129,7 @@ Limits:
 `go test -race ./dispatcher ./storage` covers:
 
 - successful publish and acknowledgement
-- exact payload bytes and `event_id` key
+- exact payload bytes and stable `agent_id/source_id` key
 - broker unavailable, retained events, and bounded retries
 - producer timeout
 - duplicate publish after a failed acknowledgement
@@ -182,9 +184,10 @@ docker compose exec kafka kafka-console-consumer \
   --property key.separator=' | '
 ```
 
-Each line is `<event_id> | <stored JSON payload>`. The key must equal the
-payload's `event_id` field, and the JSON must be byte-identical to the outbox
-row.
+Each line is `<agent_id>/<source_id> | <stored JSON payload>`. The key must
+match the payload's collection source and the agent identity, and the JSON must
+be byte-identical to the outbox row. Deduplicate downstream on the payload's
+`event_id`.
 
 ## Limitations
 

@@ -217,6 +217,12 @@ func TestReplayAcrossReopenReturnsOriginalPayload(t *testing.T) {
 		if entry.EventID != eventsToStore[i].EventID {
 			t.Fatalf("event id %d changed", i)
 		}
+		if entry.AgentID != store.Identity().AgentID ||
+			entry.SourceID != eventsToStore[i].Collection.SourceID {
+			t.Fatalf("delivery identity %d = %q/%q, want %q/%q", i,
+				entry.AgentID, entry.SourceID,
+				store.Identity().AgentID, eventsToStore[i].Collection.SourceID)
+		}
 	}
 }
 

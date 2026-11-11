@@ -15,9 +15,15 @@ import (
 
 // OutboxEntry is one pending event. Payload is the exact serialized event that
 // was stored. Replay must send these bytes unchanged.
+//
+// AgentID and SourceID form the stable delivery key: every event from one
+// agent/source pair must reach the same Kafka partition. EventID remains the
+// deduplication identity inside the payload.
 type OutboxEntry struct {
-	EventID string
-	Payload []byte
+	EventID  string
+	AgentID  string
+	SourceID string
+	Payload  []byte
 }
 
 // Append atomically stores a batch of validated events and advances the
@@ -175,8 +181,9 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxEntry, error) {
 			ErrInvalidLimit, limit, MaxPendingLimit)
 	}
 
+	agentID := s.Identity().AgentID
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT seq, event_id, payload FROM outbox ORDER BY seq LIMIT ?`, limit)
+		`SELECT seq, event_id, source_id, payload FROM outbox ORDER BY seq LIMIT ?`, limit)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -185,17 +192,23 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxEntry, error) {
 	var entries []OutboxEntry
 	for rows.Next() {
 		var (
-			seq     int64
-			eventID string
-			payload []byte
+			seq      int64
+			eventID  string
+			sourceID string
+			payload  []byte
 		)
-		if err := rows.Scan(&seq, &eventID, &payload); err != nil {
+		if err := rows.Scan(&seq, &eventID, &sourceID, &payload); err != nil {
 			return nil, mapError(err)
 		}
 		if err := validateStoredPayload(eventID, payload); err != nil {
 			return nil, fmt.Errorf("%w: event %q (seq %d): %v", ErrCorruptPayload, eventID, seq, err)
 		}
-		entries = append(entries, OutboxEntry{EventID: eventID, Payload: payload})
+		entries = append(entries, OutboxEntry{
+			EventID:  eventID,
+			AgentID:  agentID,
+			SourceID: sourceID,
+			Payload:  payload,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, mapError(err)

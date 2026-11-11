@@ -1,0 +1,60 @@
+{
+  "name": "brute_force_positive",
+  "events": [
+    {
+      "event_id": "evt_fixture_brute_1",
+      "timestamp": "2026-11-09T10:00:00Z",
+      "agent": {"agent_id": "web-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.200"},
+      "target": {"entity_type": "user", "name": "alice"},
+      "raw_event": {"format": "text", "data": "Failed password for alice from 203.0.113.200 port 50000 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_brute_2",
+      "timestamp": "2026-11-09T10:00:30Z",
+      "agent": {"agent_id": "web-02"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.200"},
+      "target": {"entity_type": "user", "name": "alice"},
+      "raw_event": {"format": "text", "data": "Failed password for alice from 203.0.113.200 port 50001 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_brute_3",
+      "timestamp": "2026-11-09T10:01:00Z",
+      "agent": {"agent_id": "web-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.200"},
+      "target": {"entity_type": "user", "name": "alice"},
+      "raw_event": {"format": "text", "data": "Failed password for alice from 203.0.113.200 port 50002 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_brute_4",
+      "timestamp": "2026-11-09T10:01:30Z",
+      "agent": {"agent_id": "web-02"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.200"},
+      "target": {"entity_type": "user", "name": "alice"},
+      "raw_event": {"format": "text", "data": "Failed password for alice from 203.0.113.200 port 50003 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_brute_5",
+      "timestamp": "2026-11-09T10:02:00Z",
+      "agent": {"agent_id": "web-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.200"},
+      "target": {"entity_type": "user", "name": "alice"},
+      "raw_event": {"format": "text", "data": "Failed password for alice from 203.0.113.200 port 50004 ssh2"}
+    }
+  ],
+  "expected": {
+    "incidents": 1,
+    "attack_type": "ssh_brute_force",
+    "failure_event_ids": 5,
+    "success_event_ids": 0,
+    "usernames": ["alice"],
+    "hosts": ["web-01", "web-02"],
+    "severity": "medium",
+    "risk_score": 40
+  }
+}

@@ -118,8 +118,8 @@ func TestKafkaIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read message %d: %v", i, err)
 		}
-		if string(message.Key) != entry.EventID {
-			t.Fatalf("message %d key = %q, want %q", i, message.Key, entry.EventID)
+		if string(message.Key) != string(DeliveryKey(entry)) {
+			t.Fatalf("message %d key = %q, want %q", i, message.Key, DeliveryKey(entry))
 		}
 		if !bytes.Equal(message.Value, entry.Payload) {
 			t.Fatalf("message %d payload differs from the stored bytes", i)

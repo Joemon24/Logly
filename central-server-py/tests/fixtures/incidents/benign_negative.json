@@ -1,0 +1,80 @@
+{
+  "name": "benign_negative",
+  "events": [
+    {
+      "event_id": "evt_fixture_benign_1",
+      "timestamp": "2026-11-09T10:20:00Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.90"},
+      "target": {"entity_type": "user", "name": "frank"},
+      "raw_event": {"format": "text", "data": "Failed password for frank from 203.0.113.90 port 50000 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_2",
+      "timestamp": "2026-11-09T10:20:01Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.90"},
+      "target": {"entity_type": "user", "name": "frank"},
+      "raw_event": {"format": "text", "data": "Failed password for frank from 203.0.113.90 port 50001 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_3",
+      "timestamp": "2026-11-09T10:20:02Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.90"},
+      "target": {"entity_type": "user", "name": "frank"},
+      "raw_event": {"format": "text", "data": "Failed password for frank from 203.0.113.90 port 50002 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_4",
+      "timestamp": "2026-11-09T10:20:03Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.90"},
+      "target": {"entity_type": "user", "name": "frank"},
+      "raw_event": {"format": "text", "data": "Failed password for frank from 203.0.113.90 port 50003 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_5",
+      "timestamp": "2026-11-09T10:21:00Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "success"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.50"},
+      "target": {"entity_type": "user", "name": "grace"},
+      "raw_event": {"format": "text", "data": "Accepted publickey for grace from 203.0.113.50 port 50004 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_6",
+      "timestamp": "2026-11-09T10:22:00Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.60"},
+      "target": {"entity_type": "user", "name": "heidi"},
+      "raw_event": {"format": "text", "data": "Failed password for heidi from 203.0.113.60 port 50005 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_7",
+      "timestamp": "2026-11-09T10:22:30Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.60"},
+      "target": {"entity_type": "user", "name": "heidi"},
+      "raw_event": {"format": "text", "data": "Failed password for heidi from 203.0.113.60 port 50006 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_benign_8",
+      "timestamp": "2026-11-09T10:23:00Z",
+      "agent": {"agent_id": "web-03"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "success"},
+      "source": {"entity_type": "ip", "ip": "203.0.113.60"},
+      "target": {"entity_type": "user", "name": "heidi"},
+      "raw_event": {"format": "text", "data": "Accepted password for heidi from 203.0.113.60 port 50007 ssh2"}
+    }
+  ],
+  "expected": {
+    "incidents": 0
+  }
+}

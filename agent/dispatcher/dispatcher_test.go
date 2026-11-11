@@ -324,8 +324,9 @@ func TestPayloadIdentityAndEventIDKey(t *testing.T) {
 	if !bytes.Equal(message.Value, stored[0].Payload) {
 		t.Fatal("kafka value is not the exact stored payload")
 	}
-	if string(message.Key) != stored[0].EventID {
-		t.Fatalf("kafka key = %q, want %q", message.Key, stored[0].EventID)
+	wantKey := "linux-01/auth-log"
+	if string(message.Key) != wantKey {
+		t.Fatalf("kafka key = %q, want %q", message.Key, wantKey)
 	}
 
 	var decoded events.Event
@@ -334,6 +335,28 @@ func TestPayloadIdentityAndEventIDKey(t *testing.T) {
 	}
 	if decoded.EventID != event.EventID {
 		t.Fatalf("payload event_id = %q, want %q", decoded.EventID, event.EventID)
+	}
+}
+
+func TestDeliveryKeyIsStablePerSource(t *testing.T) {
+	store := openTestStore(t, testConfig(t))
+	appendEvents(t, store,
+		dispatcherEvent(t, store, "auth-log", "gen-1", 1),
+		dispatcherEvent(t, store, "auth-log", "gen-1", 2),
+		dispatcherEvent(t, store, "sudo-log", "gen-1", 3),
+	)
+	entries, err := store.Pending(context.Background(), storage.MaxPendingLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(DeliveryKey(entries[0])) != "linux-01/auth-log" ||
+		string(DeliveryKey(entries[1])) != "linux-01/auth-log" ||
+		string(DeliveryKey(entries[2])) != "linux-01/sudo-log" {
+		t.Fatalf("delivery keys = %q, %q, %q",
+			DeliveryKey(entries[0]), DeliveryKey(entries[1]), DeliveryKey(entries[2]))
+	}
+	if string(DeliveryKey(entries[0])) == string(DeliveryKey(entries[2])) {
+		t.Fatal("different sources must not share a delivery key")
 	}
 }
 
@@ -348,6 +371,10 @@ func TestBatchOrderingAndBounds(t *testing.T) {
 		all = append(all, dispatcherEvent(t, store, sourceID, "gen-1", i))
 	}
 	appendEvents(t, store, all...)
+	expected, err := store.Pending(context.Background(), storage.MaxPendingLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	producer := &fakeProducer{}
 	d, err := New(Config{
@@ -365,7 +392,7 @@ func TestBatchOrderingAndBounds(t *testing.T) {
 	}
 	defer d.Close()
 
-	var delivered []string
+	var delivered [][]byte
 	for i := 0; i < 3; i++ {
 		acked, err := d.DispatchOnce(context.Background())
 		if err != nil {
@@ -379,15 +406,15 @@ func TestBatchOrderingAndBounds(t *testing.T) {
 			t.Fatalf("dispatch %d acked = %d, want %d", i, acked, want)
 		}
 		for _, message := range producer.call(i) {
-			delivered = append(delivered, string(message.Key))
+			delivered = append(delivered, message.Value)
 		}
 	}
 	if producer.callCount() != 3 {
 		t.Fatalf("producer calls = %d, want 3", producer.callCount())
 	}
-	for i, event := range all {
-		if delivered[i] != event.EventID {
-			t.Fatalf("delivery order %d = %q, want %q", i, delivered[i], event.EventID)
+	for i := range all {
+		if !bytes.Equal(delivered[i], expected[i].Payload) {
+			t.Fatalf("delivery order %d does not match outbox sequence order", i)
 		}
 	}
 	if stats := d.Stats(); stats.Batches != 3 || stats.Delivered != 5 || stats.Acknowledged != 5 {
@@ -665,8 +692,8 @@ func TestRestartWithPendingEvents(t *testing.T) {
 		if !bytes.Equal(message.Value, before[i].Payload) {
 			t.Fatalf("restart changed payload %d", i)
 		}
-		if string(message.Key) != before[i].EventID {
-			t.Fatalf("restart changed event_id key %d", i)
+		if string(message.Key) != string(DeliveryKey(before[i])) {
+			t.Fatalf("restart changed delivery key %d", i)
 		}
 	}
 	if entries, err := store.Pending(context.Background(), storage.MaxPendingLimit); err != nil || len(entries) != 0 {
