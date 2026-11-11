@@ -11,6 +11,7 @@ from uuid import uuid4
 from elasticsearch import Elasticsearch
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
+from kafka.errors import NoBrokersAvailable, UnrecognizedBrokerVersion
 from kafka.structs import TopicPartition
 
 from api.schema_v2 import compute_event_id, validate_event_v2
@@ -40,9 +41,7 @@ def wait_for(check, label, seconds=75):
 def connect():
     try:
         return KafkaAdminClient(bootstrap_servers=broker, request_timeout_ms=5000)
-    except Exception as error:
-        if type(error).__name__ != "NoBrokersAvailable":
-            raise
+    except (NoBrokersAvailable, UnrecognizedBrokerVersion):
         return None
 
 
