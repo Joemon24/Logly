@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "event_id": "evt2_bc95b9c22a88553fe380d0e2a701793b6649aa76fc35509e601d99c7f17359d8",
+  "timestamp": "2026-11-09T10:15:33.123456789Z",
+  "ingest_timestamp": "2026-11-09T10:15:33.23456789Z",
+  "timestamp_source": "log",
+  "sequence": 3,
+  "agent": {
+    "agent_id": "linux-01",
+    "agent_type": "linux",
+    "agent_version": "2.0.0",
+    "generation": "agent-gen-7f3a9c2e"
+  },
+  "host": {
+    "hostname": "web-01",
+    "os": "ubuntu",
+    "os_version": "24.04",
+    "kernel": "6.8.0-45-generic"
+  },
+  "event": {
+    "category": "account",
+    "action": "user_created",
+    "outcome": "success"
+  },
+  "source": {
+    "entity_type": "process",
+    "name": "useradd",
+    "path": "/usr/sbin/useradd",
+    "pid": 5001
+  },
+  "target": {
+    "entity_type": "user",
+    "id": "1001",
+    "name": "bob"
+  },
+  "raw_event": {
+    "format": "text",
+    "data": "Nov  9 10:16:13 web-01 useradd[5001]: new user: name=bob, UID=1001, GID=1001, home=/home/bob, shell=/bin/bash\n"
+  },
+  "collection": {
+    "source_id": "auth-log",
+    "source_type": "file",
+    "path": "/var/log/auth.log",
+    "generation": "source-gen-4b8d1e6a",
+    "position": {
+      "byte_offset": 3072,
+      "record_number": 9
+    }
+  }
+}

@@ -16,7 +16,12 @@ from kafka import KafkaConsumer
 from kafka.structs import TopicPartition, OffsetAndMetadata
 from api.settings import elasticsearch_client
 from api.soar.policy import alert_due
-from elasticsearch import Elasticsearch, helpers
+from elasticsearch import Elasticsearch, helpers, ConflictError
+
+from api.incident_intelligence import (
+    analyze_event as analyze_incident,
+    is_authentication_event,
+)
 
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
@@ -41,6 +46,11 @@ from api.soar.notifier import (
 from api.rule_engine import (
     load_rules,
     evaluate_rules
+)
+from api.schema_v2 import (
+    SchemaV2Error,
+    is_v2_event,
+    validate_event_v2,
 )
 # =========================================================
 # SOAR
@@ -138,7 +148,9 @@ os.makedirs("models", exist_ok=True)
 # LOAD TRAINING DATA
 # =========================================================
 
-if os.path.exists(TRAINING_DATA_PATH):
+legacy_ml_enabled = os.getenv("LOGLY_ENABLE_LEGACY_ML") == "1"
+
+if legacy_ml_enabled and os.path.exists(TRAINING_DATA_PATH):
 
     try:
 
@@ -162,7 +174,8 @@ if os.path.exists(TRAINING_DATA_PATH):
 # =========================================================
 
 if (
-    os.path.exists(MODEL_PATH)
+    legacy_ml_enabled
+    and os.path.exists(MODEL_PATH)
     and os.path.exists(SCALER_PATH)
 ):
 
@@ -449,15 +462,109 @@ def update_trust_score(
 # KAFKA CONSUMER
 # =========================================================
 
+MALFORMED_KEY = "__logly_malformed__"
+
+# A claim older than this belongs to a consumer that crashed before writing the
+# event. It may be taken over; a fresher claim means another consumer is still
+# working on the event.
+CLAIM_STALE_AFTER = timedelta(seconds=120)
+
+
+class EventInFlight(RuntimeError):
+    """Another consumer holds a fresh claim on this event."""
+
+
+def parse_message(raw):
+    """Decode one Kafka value. Malformed JSON is a poison message, not a crash."""
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return {
+            MALFORMED_KEY: str(error),
+            "raw": raw.decode("utf-8", "replace")[:65536],
+        }
+
+
+def rejection_id(message, position, kind="invalid"):
+    return f"{message.topic}:{message.partition}:{message.offset}:{kind}:{position}"
+
+
+def reject(message, reason, payload, position=0):
+    """Stage one rejected record with a stable ID so retries overwrite, not grow."""
+    bulk_buffer.append({
+        "_index": "ids-rejected",
+        "_id": rejection_id(message, position),
+        "_source": {
+            "reason": reason,
+            "payload": payload if isinstance(payload, str) else json.dumps(payload, default=str),
+            "rejected_at": datetime.now(timezone.utc).isoformat(),
+        },
+    })
+
+
+def claim_v2_event(client, event, now):
+    """Atomically claim a v2 event before any detection work.
+
+    Returns "claimed", "takeover", or "duplicate". A duplicate has already been
+    fully written, so features are not recomputed; its incident analysis is
+    still safe to repeat because incident IDs and evidence are idempotent.
+    """
+    identifier = event["event_id"]
+    claim = {
+        "event_id": identifier,
+        "schema_version": 2,
+        "agent": event.get("agent", {}),
+        "processed": False,
+        "claimed_at": now.isoformat(),
+    }
+    try:
+        client.create(index=ES_INDEX, id=identifier, document=claim)
+        return "claimed"
+    except ConflictError:
+        document = client.get(index=ES_INDEX, id=identifier)
+        source = document.get("_source", {})
+        if source.get("processed") is True:
+            return "duplicate"
+        # Documents written before claims existed have no processed flag but do
+        # have the canonical storage_id. Treat them as complete, not as claims.
+        if "processed" not in source and source.get("storage_id") == identifier:
+            return "duplicate"
+        try:
+            claimed_at = datetime.fromisoformat(source.get("claimed_at"))
+        except (TypeError, ValueError):
+            claimed_at = None
+        if claimed_at is not None and claimed_at.tzinfo is None:
+            claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+        if claimed_at is not None and now - claimed_at < CLAIM_STALE_AFTER:
+            raise EventInFlight(
+                f"event {identifier} is claimed by another consumer"
+            )
+        client.index(index=ES_INDEX, id=identifier, document=claim)
+        return "takeover"
+
+
+def flush_and_commit(message, analysis_events=()):
+    """Write buffered documents and incidents, then commit this offset."""
+    if bulk_buffer:
+        helpers.bulk(es, bulk_buffer)
+        bulk_buffer.clear()
+    if analysis_events:
+        es.indices.refresh(index=ES_INDEX)
+        for event in analysis_events:
+            analyze_incident(es, event)
+    consumer.commit({
+        TopicPartition(message.topic, message.partition):
+            OffsetAndMetadata(message.offset + 1, "", -1)
+    })
+
+
 consumer = KafkaConsumer(
     TOPIC,
     bootstrap_servers=KAFKA_BROKERS,
     group_id=GROUP_ID,
     auto_offset_reset="earliest",
     enable_auto_commit=False,
-    value_deserializer=lambda v: json.loads(
-        v.decode("utf-8")
-    ),
+    value_deserializer=parse_message,
 )
 
 print("🚀 Consumer started...")
@@ -472,23 +579,50 @@ try:
 
         payload = msg.value
 
+        if isinstance(payload, dict) and MALFORMED_KEY in payload:
+            reject(msg, f"malformed JSON: {payload[MALFORMED_KEY]}", payload.get("raw", ""), "json")
+            flush_and_commit(msg)
+            continue
+
         if not isinstance(payload, list):
             payload = [payload]
+
+        analysis_events = []
 
         for event_position, event in enumerate(payload):
 
             try:
 
                 if not isinstance(event, dict) or not event:
-                    bulk_buffer.append({
-                        "_index": "ids-rejected",
-                        "_id": f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}",
-                        "_source": {"reason": "Event must be a nonempty object", "payload": json.dumps(event)},
-                    })
+                    reject(msg, "Event must be a nonempty object", event, event_position)
                     continue
 
-                event["storage_id"] = f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}"
+                schema_version = event.get("schema_version")
+                if schema_version is not None and schema_version != 2:
+                    reject(msg, f"unsupported schema_version {schema_version!r}", event, event_position)
+                    continue
+
                 now = datetime.now(timezone.utc)
+
+                if is_v2_event(event):
+                    try:
+                        validate_event_v2(event)
+                    except SchemaV2Error as error:
+                        reject(msg, f"schema v2 validation failed: {error}", event, event_position)
+                        continue
+
+                    # Claim the stable event_id atomically before feature work.
+                    # A duplicate is already stored, so its features are skipped;
+                    # incident analysis remains idempotent and is retried.
+                    event["storage_id"] = event["event_id"]
+                    event["processed"] = True
+                    if claim_v2_event(es, event, now) == "duplicate":
+                        print(f"↩️  Duplicate event skipped: {event['storage_id']}")
+                        if is_authentication_event(event):
+                            analysis_events.append(event)
+                        continue
+                else:
+                    event["storage_id"] = f"{msg.topic}:{msg.partition}:{msg.offset}:{event_position}"
 
 
                 if "agent" not in event:
@@ -500,11 +634,14 @@ try:
                 metadata = event.get("event", {})
                 if isinstance(metadata, dict) and (
                     metadata.get("type") == "heartbeat" or
-                    metadata.get("category") not in (None, "auth")
+                    metadata.get("category") not in (None, "auth", "authentication")
                 ):
                     event["@timestamp"] = now.isoformat()
                     bulk_buffer.append({"_index": ES_INDEX, "_id": event["storage_id"], "_source": event})
                     continue
+
+                if event.get("schema_version") == 2 and is_authentication_event(event):
+                    analysis_events.append(event)
 
                 # =================================================
                 # CLEANUP
@@ -876,12 +1013,10 @@ try:
                 # Restart replays this record; deterministic IDs avoid duplicate documents.
                 raise
 
-        if bulk_buffer:
-            helpers.bulk(es, bulk_buffer)
-            bulk_buffer.clear()
-        consumer.commit({
-            TopicPartition(msg.topic, msg.partition): OffsetAndMetadata(msg.offset + 1, "", -1)
-        })
+        # A bulk, incident, or exists failure raises before this commit, so the
+        # message is replayed after restart. Documents use stable IDs, so replay
+        # is safe.
+        flush_and_commit(msg, analysis_events)
 
 except KeyboardInterrupt:
 

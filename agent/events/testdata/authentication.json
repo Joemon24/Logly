@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "event_id": "evt2_fe35cc8f42afd77febeb9f24205a671d4e4599cbbbf6669907b8e158fefbdb8c",
+  "timestamp": "2026-11-09T10:15:30.123456789Z",
+  "ingest_timestamp": "2026-11-09T10:15:30.163456789Z",
+  "timestamp_source": "log",
+  "sequence": 1,
+  "agent": {
+    "agent_id": "linux-01",
+    "agent_type": "linux",
+    "agent_version": "2.0.0",
+    "generation": "agent-gen-7f3a9c2e"
+  },
+  "host": {
+    "hostname": "web-01",
+    "os": "ubuntu",
+    "os_version": "24.04",
+    "kernel": "6.8.0-45-generic"
+  },
+  "event": {
+    "category": "authentication",
+    "action": "ssh_login",
+    "outcome": "failure"
+  },
+  "source": {
+    "entity_type": "ip",
+    "ip": "203.0.113.9"
+  },
+  "target": {
+    "entity_type": "user",
+    "id": "1000",
+    "name": "alice"
+  },
+  "raw_event": {
+    "format": "text",
+    "data": "Failed password for alice from 203.0.113.9 port 50000 ssh2\n"
+  },
+  "collection": {
+    "source_id": "auth-log",
+    "source_type": "file",
+    "path": "/var/log/auth.log",
+    "generation": "source-gen-4b8d1e6a",
+    "position": {
+      "byte_offset": 1024,
+      "record_number": 7
+    }
+  }
+}

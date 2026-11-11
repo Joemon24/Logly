@@ -1,0 +1,51 @@
+{
+  "name": "suspicious_success_positive",
+  "events": [
+    {
+      "event_id": "evt_fixture_success_1",
+      "timestamp": "2026-11-09T10:10:00Z",
+      "agent": {"agent_id": "app-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "192.0.2.88"},
+      "target": {"entity_type": "user", "name": "bob"},
+      "raw_event": {"format": "text", "data": "Failed password for bob from 192.0.2.88 port 50000 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_success_2",
+      "timestamp": "2026-11-09T10:10:30Z",
+      "agent": {"agent_id": "app-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "192.0.2.88"},
+      "target": {"entity_type": "user", "name": "bob"},
+      "raw_event": {"format": "text", "data": "Failed password for bob from 192.0.2.88 port 50001 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_success_3",
+      "timestamp": "2026-11-09T10:11:00Z",
+      "agent": {"agent_id": "app-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "failure"},
+      "source": {"entity_type": "ip", "ip": "192.0.2.88"},
+      "target": {"entity_type": "user", "name": "bob"},
+      "raw_event": {"format": "text", "data": "Failed password for bob from 192.0.2.88 port 50002 ssh2"}
+    },
+    {
+      "event_id": "evt_fixture_success_4",
+      "timestamp": "2026-11-09T10:12:00Z",
+      "agent": {"agent_id": "app-01"},
+      "event": {"category": "authentication", "action": "ssh_login", "outcome": "success"},
+      "source": {"entity_type": "ip", "ip": "192.0.2.88"},
+      "target": {"entity_type": "user", "name": "bob"},
+      "raw_event": {"format": "text", "data": "Accepted password for bob from 192.0.2.88 port 50003 ssh2"}
+    }
+  ],
+  "expected": {
+    "incidents": 1,
+    "attack_type": "suspicious_login_success",
+    "failure_event_ids": 3,
+    "success_event_ids": 1,
+    "usernames": ["bob"],
+    "hosts": ["app-01"],
+    "severity": "high",
+    "risk_score": 60
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": 2,
+  "event_id": "evt2_0e859cc83174850be4736e2a0aa53ca81b7d50869e0c181d97d72f29a2dea0ab",
+  "timestamp": "2026-11-09T10:15:34.123456789Z",
+  "ingest_timestamp": "2026-11-09T10:15:34.23456789Z",
+  "timestamp_source": "log",
+  "sequence": 4,
+  "agent": {
+    "agent_id": "linux-01",
+    "agent_type": "linux",
+    "agent_version": "2.0.0",
+    "generation": "agent-gen-7f3a9c2e"
+  },
+  "host": {
+    "hostname": "web-01",
+    "os": "ubuntu",
+    "os_version": "24.04",
+    "kernel": "6.8.0-45-generic"
+  },
+  "event": {
+    "category": "process",
+    "action": "process_exec",
+    "outcome": "success"
+  },
+  "source": {
+    "entity_type": "process",
+    "name": "bash",
+    "pid": 6000
+  },
+  "target": {
+    "entity_type": "process",
+    "name": "curl",
+    "path": "/usr/bin/curl",
+    "pid": 6001
+  },
+  "raw_event": {
+    "format": "audit",
+    "data": "type=EXECVE msg=audit(1762673744.123:42): argc=2 a0=\"curl\" a1=\"https://example.invalid/\"\n"
+  },
+  "collection": {
+    "source_id": "audit-log",
+    "source_type": "audit",
+    "path": "/var/log/audit/audit.log",
+    "generation": "source-gen-9a2c5f73",
+    "position": {
+      "byte_offset": 4096,
+      "record_number": 12
+    }
+  }
+}

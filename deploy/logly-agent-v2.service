@@ -1,0 +1,24 @@
+[Unit]
+Description=Logly v2 Linux security telemetry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logly
+Group=logly
+SupplementaryGroups=adm
+EnvironmentFile=/etc/logly/agent-v2.env
+ExecStart=/usr/local/bin/logly-agent-v2
+StateDirectory=logly-agent-v2
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target
