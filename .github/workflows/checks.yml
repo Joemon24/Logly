@@ -26,3 +26,9 @@ jobs:
         working-directory: agent
       - run: go vet ./...
         working-directory: agent
+      - name: Smoke test the agent v2 executable on Ubuntu
+        timeout-minutes: 5
+        working-directory: agent
+        run: |
+          go build -o "$RUNNER_TEMP/logly-agent-v2" ./cmd/agent-v2
+          python3 -I ../scripts/smoke-agent-v2.py "$RUNNER_TEMP/logly-agent-v2"

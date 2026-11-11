@@ -1,6 +1,14 @@
 # Ubuntu v2 verification procedure
 
-Status: live Ubuntu validation is pending. Run on an isolated Ubuntu host with a dedicated Kafka topic/group and disposable agent state. The existing Compose detector defaults to v1; start a separate Python consumer with the v2 topic, distinct group and trusted Elasticsearch endpoint.
+## Ubuntu CI coverage
+
+The existing Ubuntu Go job runs race-enabled package tests for fixture parsing, SQLite checkpoint and outbox recovery, file rotation and truncation, and the v2 runtime with a fake Kafka producer. The Python job runs unit tests and builds the detection-engine image.
+
+The executable smoke step builds and launches `agent-v2` with a disposable authentication log and SQLite outbox. It checks fixture collection, checkpoint recovery after a process restart, preservation of stored event IDs, and rename-and-create rotation with an unread record on the old inode. The broker address is a reserved, non-listening loopback port, so the check ends at the outbox. It needs Go and Python's standard library.
+
+## Live host validation
+
+Systemd service operation, auditd collection, real SSH log generation, and production deployment remain unverified. Run on an isolated Ubuntu host with a dedicated Kafka topic/group and disposable agent state. The existing Compose detector defaults to v1; start a separate Python consumer with the v2 topic, distinct group and trusted Elasticsearch endpoint.
 
 1. Install Go 1.23+, build with `cd agent && go build -o ../bin/logly-agent-v2 ./cmd/agent-v2` and provision a dedicated service account. Install the binary and review the example v2 unit and environment below. The account needs read-only access to the chosen logs and ownership of its SQLite state directory. Confirm `sudo -u logly test -r /var/log/auth.log` before starting. Do not change permissions on live logs merely to make a check pass.
 2. If rsyslog writes the file, set `LOGLY_V2_LOG_PATH` to it. Start with the audit path unset. Install the service template, run `systemd-analyze verify`, then check `systemctl status logly-agent-v2` and `journalctl -u logly-agent-v2`. Confirm source availability and outbox counters. Exercise legitimate test SSH and sudo activity on the staging host and verify category, outcome and agent ID in Events.
