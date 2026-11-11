@@ -70,6 +70,8 @@ class InvestigatorTests(unittest.TestCase):
         self.assertEqual(answer["mode"], "deterministic")
         self.assertGreater(len(answer["host_history"]), 0)
         class Available:
+            name = "ollama"
+
             def topic(self, question):
                 return "related"
         answer = investigate(tools, "fixture", "Any other incidents?", Available())

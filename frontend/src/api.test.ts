@@ -9,6 +9,19 @@ describe('Logly API requests', () => {
     expect(url).toBe('/events?limit=25&offset=25&source_ip=2001%3Adb8%3A%3A1&username=J+%26+J')
   })
 
+  it('accepts Groq routing metadata without any provider credentials', async () => {
+    const body = {
+      incident_id: 'fixture', mode: 'groq', topic: 'source', rule: 'SSH rule',
+      reproduced: true, observations: [], gaps: [], recommendations: [],
+      related_incident_ids: [], host_history: [],
+    }
+    const fetch = vi.fn().mockResolvedValue(Response.json(body))
+    vi.stubGlobal('fetch', fetch)
+    await expect(request('/incidents/fixture/investigate', undefined, { question: 'What was the source IP?' })).resolves.toEqual(body)
+    expect(fetch.mock.calls[0][0]).toBe('/api/incidents/fixture/investigate')
+    expect(fetch.mock.calls[0][1].headers).toEqual({ Accept: 'application/json', 'Content-Type': 'application/json' })
+  })
+
   it('preserves a successful empty result', async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ total: 0, events: [] }))
     vi.stubGlobal('fetch', fetch)

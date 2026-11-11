@@ -42,7 +42,7 @@ export type IncidentDetail = Incident & {
 
 export type Investigation = {
   incident_id: string
-  mode: 'deterministic' | 'ollama'
+  mode: 'deterministic' | 'ollama' | 'groq'
   topic: string
   rule: string
   reproduced: boolean
@@ -87,7 +87,7 @@ function valid(path: string, body: Record<string, unknown>) {
   if (path === '/incidents') return number(body.total) && list(body.incidents)
   if (path.endsWith('/investigate')) {
     const strings = (items: unknown) => Array.isArray(items) && items.every(item => typeof item === 'string')
-    return typeof body.incident_id === 'string' && ['deterministic', 'ollama'].includes(String(body.mode))
+    return typeof body.incident_id === 'string' && ['deterministic', 'ollama', 'groq'].includes(String(body.mode))
       && typeof body.topic === 'string' && typeof body.rule === 'string' && typeof body.reproduced === 'boolean'
       && strings(body.gaps) && strings(body.recommendations) && strings(body.related_incident_ids)
       && Array.isArray(body.observations) && body.observations.every(item => object(item) && typeof item.text === 'string' && strings(item.event_ids))

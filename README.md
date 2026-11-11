@@ -9,7 +9,7 @@ Logly is a distributed Linux security monitoring and incident investigation syst
 | Experience | What runs |
 | --- | --- |
 | **Public Simulation Lab** | GitHub Pages serves four recorded replays generated from synthetic fixtures. Step through SSH brute force, password spraying, suspicious login success, or benign activity and inspect the rule matches and cited events. The browser uses bundled data with no connection to live hosts or backend services. |
-| **Full local system** | Go collectors read host logs. Kafka carries events to the Python consumer, which stores events and incidents in Elasticsearch. A private FastAPI service powers event search, incident timelines, host history, and the Investigator. Local Ollama is optional. |
+| **Full local system** | Go collectors read host logs. Kafka carries events to the Python consumer, which stores events and incidents in Elasticsearch. A private FastAPI service powers event search, incident timelines, host history, and the Investigator. Topic routing can optionally use local Ollama or Groq. |
 
 Start with **SSH brute force** to see how five authentication failures become one rule match. Then try **Benign authentication** to see a replay without a match.
 
@@ -30,7 +30,7 @@ flowchart TD
     search["Elasticsearch event and incident indices"]
     api["Private FastAPI and Investigator"]
     ui["React analyst dashboard"]
-    ollama["Optional local Ollama"]
+    router["Optional Ollama or Groq"]
 
     logs --> agent
     agent -->|"Publish queued events"| kafka
@@ -38,7 +38,7 @@ flowchart TD
     consumer -->|"Persist events and incidents"| search
     search -->|"Retrieve stored evidence"| api
     api -->|"Same-origin API via Vite proxy"| ui
-    api -.->|"Question topic selection only"| ollama
+    api -.->|"Question topic selection only"| router
 ```
 
 - **Durable collection.** The Go agent persists source generations, file checkpoints, and pending events in SQLite. An event leaves the outbox after Kafka acknowledges it.
@@ -48,7 +48,7 @@ flowchart TD
 
 ### AI-assisted investigation
 
-The read-only Investigator uses stored evidence to reproduce an incident rule where possible, link citations to event rows, and flag missing evidence. It can surface host history, related incidents, and suggested next steps. With `LOGLY_OLLAMA_MODEL` configured, local Ollama classifies the analyst’s question into a supported topic. Python retrieves the records and renders the findings and citations. Ollama receives the question without log text or storage access. If the model is unavailable or returns an unsupported topic, deterministic routing takes over.
+The read-only Investigator uses stored evidence to reproduce an incident rule where possible, link citations to event rows, and flag missing evidence. It can surface host history, related incidents, and suggested next steps. With `LOGLY_OLLAMA_MODEL` configured, local Ollama classifies the analyst’s question into a supported topic. Python retrieves the records and renders the findings and citations. Ollama receives the question without log text or storage access. Groq is an explicit backend opt-in that receives only a vocabulary-checked version of the question. If a provider is unavailable or returns an unsupported topic, deterministic routing takes over. See the [provider setup and evaluation guide](docs/INVESTIGATOR-PROVIDERS.md).
 
 ## Verified results
 
@@ -130,14 +130,14 @@ npm audit
 | Collection and local persistence | Go, SQLite |
 | Streaming, detection, and search | Apache Kafka, Python, Elasticsearch |
 | API and dashboard | FastAPI, React, TypeScript, Vite |
-| Investigation and experiments | Ollama (optional), scikit-learn (offline experiment) |
+| Investigation and experiments | Ollama or Groq (optional), scikit-learn (offline experiment) |
 | Local stack and demo hosting | Docker Compose, GitHub Actions, GitHub Pages |
 
 ## Current limitations
 
 - **Ubuntu validation:** Live auditd, systemd, and file-watch operation still need verification on Ubuntu. The real-stack checks ran on macOS with fixture data.
 - **Anomaly detection:** Isolation Forest is experimental and runs offline. It has no effect on incident decisions, and accuracy on representative data is unmeasured.
-- **LLM evaluation:** Local Ollama routing was smoke-tested on five questions. Broader routing and investigation quality have yet to be measured.
+- **LLM evaluation:** The 40-question synthetic evaluation measures routing only. Broader routing and investigation quality have yet to be measured.
 - **Deployment boundary:** FastAPI is unauthenticated and intended for private development only. Keep it and the development data services on a trusted local network.
 
 ## Documentation
