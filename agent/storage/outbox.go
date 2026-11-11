@@ -203,6 +203,38 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxEntry, error) {
 	return entries, nil
 }
 
+// OutboxStats is a read-only snapshot of the outbox backlog.
+type OutboxStats struct {
+	Pending int
+	// OldestStoredAt is when the oldest pending event was stored. It is the
+	// zero time when Pending is zero.
+	OldestStoredAt time.Time
+}
+
+// OutboxStats returns the pending count and the age anchor of the oldest event.
+// It is a separate read from Pending and may race with concurrent appends or
+// acknowledgements; use it for operational metrics, not for delivery decisions.
+func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
+	var (
+		pending int
+		oldest  sql.NullString
+	)
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(stored_at) FROM outbox`).
+		Scan(&pending, &oldest); err != nil {
+		return OutboxStats{}, mapError(err)
+	}
+	stats := OutboxStats{Pending: pending}
+	if oldest.Valid {
+		storedAt, err := time.Parse(time.RFC3339Nano, oldest.String)
+		if err != nil {
+			return OutboxStats{}, fmt.Errorf("storage: parse oldest stored_at: %w", err)
+		}
+		stats.OldestStoredAt = storedAt
+	}
+	return stats, nil
+}
+
 // Ack deletes delivered events. The caller must only call it after Kafka has
 // confirmed delivery; this package cannot verify delivery. Unknown IDs are
 // ignored, which makes retries after a crash safe. Ack does not move source

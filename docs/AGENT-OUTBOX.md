@@ -1,9 +1,10 @@
 # Agent durable outbox (Phase 2)
 
 Status: **storage package and tests only.** The Phase 3 authentication-log
-collector (`agent/collector`, see `AGENT-AUTH-COLLECTOR.md`) consumes this
-package, but nothing in the v1 runtime pipeline uses it yet. Kafka dispatch,
-Python, Docker, deployment files, and v1 code are unchanged.
+collector (`agent/collector`, see `AGENT-AUTH-COLLECTOR.md`) writes to this
+package and the Phase 4 Kafka dispatcher (`agent/dispatcher`, see
+`AGENT-KAFKA-DISPATCHER.md`) drains it, but nothing in the v1 runtime pipeline
+uses it yet. Python, Docker, deployment files, and v1 code are unchanged.
 
 Package: `agent/storage`
 Tests: `agent/storage/*_test.go`
@@ -366,7 +367,7 @@ Known limits:
 - The capacity check is per `Store` instance/process, backed by the database
   count; cross-process writers still serialize through SQLite.
 - No rejection ledger, metrics, or alerting.
-- `Ack` is manual; a future dispatcher owns the Kafka-confirmation decision.
+- `Ack` is manual; the Phase 4 dispatcher owns the Kafka-confirmation decision.
 - Heartbeat sequence is a logical counter only. The collector must embed it in
   a heartbeat event and persist that event through the outbox.
 - Generation rotation is manual. The store does not detect rotation from file
@@ -381,16 +382,17 @@ Known limits:
 
 The authentication-log collector in `agent/collector` covers the collection,
 identity, checkpoint, rejection-policy, and bounded-read parts of Phase 3. The
-remaining integration work is:
+Kafka dispatcher in `agent/dispatcher` provides `Pending` → Kafka → `Ack` after
+broker confirmation, bounded retry/backoff, in-process counters (pending,
+oldest pending age, acknowledgements, failures), graceful shutdown, and an
+opt-in real-Kafka integration test. See `AGENT-KAFKA-DISPATCHER.md`.
 
-1. Replace the item-at-a-time send path with: `Pending` → Kafka → `Ack` only
-   after broker confirmation.
-2. Add dispatcher retry/backoff for `ErrDiskFull`, `SQLITE_BUSY`, and capacity
-   pressure.
-3. Add metrics for pending count, oldest pending age, ack failures, and
-   checkpoint lag.
-4. Add graceful shutdown that stops collection before closing the store.
-5. Add an integration test with the real Kafka client and the v2 event model.
+Remaining integration work:
+
+1. Wire the collector, dispatcher, and store lifecycle into the agent runtime
+   with explicit Kafka broker/topic configuration.
+2. Add a metrics endpoint/exporter and rejection ledger.
+3. Connect the Python consumer and deduplicate on `event_id`.
 
 ## Test coverage
 
@@ -401,6 +403,7 @@ remaining integration work is:
 - idempotent duplicate submission and conflicting duplicate payloads
 - replay across close/reopen with byte-identical payloads
 - deterministic pending order, limits, and partial acknowledgement
+- pending count and oldest stored-at statistics
 - capacity enforcement and reuse after acknowledgement
 - strict byte-offset and record-number checkpoint progression, including
   duplicate, stale, skipped, contradictory, and mixed positions

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"agent/events"
 )
@@ -264,6 +265,48 @@ func TestPendingOrderLimitAndPartialAck(t *testing.T) {
 	}
 	if acked != 0 {
 		t.Fatalf("unknown ack = %d, want 0", acked)
+	}
+}
+
+func TestOutboxStatsTracksPendingCountAndOldestAge(t *testing.T) {
+	store := openTestStore(t, testConfig(t))
+	ctx := context.Background()
+
+	empty, err := store.OutboxStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Pending != 0 || !empty.OldestStoredAt.IsZero() {
+		t.Fatalf("empty stats = %+v", empty)
+	}
+
+	before := time.Now().Add(-time.Second)
+	first := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-1", 1, int64Ptr(100))
+	second := testEvent(t, store, "auth-log", events.SourceTypeFile, "gen-1", 2, int64Ptr(200))
+	if err := store.Append(ctx, []events.Event{first, second}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.OutboxStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Pending != 2 {
+		t.Fatalf("pending = %d, want 2", stats.Pending)
+	}
+	if stats.OldestStoredAt.Before(before) || stats.OldestStoredAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("oldest stored_at = %v, want current time", stats.OldestStoredAt)
+	}
+
+	if _, err := store.Ack(ctx, []string{first.EventID}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = store.OutboxStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Pending != 1 || stats.OldestStoredAt.IsZero() {
+		t.Fatalf("stats after partial ack = %+v", stats)
 	}
 }
 
